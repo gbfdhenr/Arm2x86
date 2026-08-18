@@ -1,0 +1,153 @@
+                   GNU LESSER GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+
+  This version of the GNU Lesser General Public License incorporates
+the terms and conditions of version 3 of the GNU General Public
+License, supplemented by the additional permissions listed below.
+
+  0. Additional Definitions.
+
+  As used herein, "this License" refers to version 3 of the GNU Lesser
+General Public License, and the "GNU GPL" refers to version 3 of the
+GNU General Public License.
+
+  "The Library" refers to a covered work governed by this License,
+other than an Application or a Combined Work as defined below.
+
+  An "Application" is any work that makes use of an interface provided
+by the Library, but which is not otherwise based on the Library.
+Defining a subclass of a class defined by the Library is deemed a mode
+of using an interface provided by the Library.
+
+  A "Combined Work" is a work produced by combining or linking an
+Application with the Library.  The particular version of the Library
+with which the Combined Work was made is also covered by this License.
+
+  The "Corresponding Source" for a Combined Work means the source code
+needed to understand and run the Combined Work, including any source
+code needed to understand and run the Application, but excluding
+System Libraries of the Combined Work.
+
+  The "Minimal Corresponding Source" for a Combined Work means the
+source code of the Library, excluding source code that is part of the
+Application's Corresponding Source.
+
+  The "Control" of a library means the ability to modify it and
+recompile it from source code, together with the full corresponding
+source code needed to understand and run the library.
+
+  To "Convey" a work means any kind of propagation that enables other
+parties to make or receive copies of the work.
+
+  1. Exception to Section 3 of the GNU GPL.
+
+  You may convey a covered work under sections 3 and 4 of this License
+without being bound by section 3 of the GNU GPL.
+
+  2. Conveying Modified Versions.
+
+  If you modify a copy of the Library, and at the time of conveying
+the Library you:
+ (a) do so under the terms of this License; and
+ (b) give prominent notice with the modified copy of the Library that
+ it is governed by this License; and
+ (c) state that it is modified, and give the date of modification;
+then you may convey it.
+
+  3. Object Code Incorporating Material from Library Header Files.
+
+  The object code form of an Application may incorporate material from
+a header file that is part of the Library.  You may convey such object
+code under terms of your choice, provided that, if the incorporated
+material is not limited to numerical data, interface declarations, or
+small helper macros, you also provide:
+ (a) prominent notice with each copy of the object code that the
+ Library is used in it and that the Library and its use are covered by
+ this License; and
+ (b) a copy of this License.
+
+  4. Combined Works.
+
+  You may convey a Combined Work under terms of your choice that,
+taken together, effectively do not restrict modification of the
+portions of the Library contained in the Combined Work, provided you
+also give:
+ (a) prominent notice with the Combined Work that the Library is used
+ in it and that the Library and its use are covered by this License;
+ and
+ (b) a copy of this License.
+
+  5. Combined Works that are Libraries.
+
+  If the Combined Work is a library, you may convey it under the terms
+of this License or any later version of the Library License, provided
+you also give:
+ (a) prominent notice with the Combined Work that the Library is used
+ in it and that the Library and its use are covered by this License;
+ and
+ (b) a copy of this License.
+
+  6. Revised Versions of the GNU Lesser General Public License.
+
+  The Free Software Foundation may publish revised and/or new versions
+of the GNU Lesser General Public License from time to time.  Such new
+versions will be similar in spirit to the present version, but may
+differ in detail to address new problems or concerns.
+
+  Each version is given a distinguishing version number.  If the
+Library as you received it specifies that a certain numbered version
+of the GNU Lesser General Public License "or any later version"
+applies to it, you have the option of following the terms and
+conditions either of that published version or of any later version
+published by the Free Software Foundation.  If the Library does not
+specify a license version number, you may choose any version ever
+published by the Free Software Foundation.
+
+  If the Library as you received it specifies that a proxy can decide
+whether future versions of the License shall apply, that proxy's
+public statement of acceptance of a version permanently authorizes you
+to use that version of the License for the Library.
+
+  For the GNU General Public License, the proxy is the Free Software
+Foundation's Executive Director.
+
+  Later license versions may give you additional or different
+permissions.  However, no additional obligations are imposed on any
+author or copyright holder as a result of your choosing to follow a
+later version.
+
+  7. Disclaimer of Warranty.
+
+  THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY
+APPLICABLE LAW.  EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT
+HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM "AS IS" WITHOUT
+WARRANTY OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE.  THE ENTIRE RISK AS TO THE QUALITY AND
+PERFORMANCE OF THE PROGRAM IS WITH YOU.  SHOULD THE PROGRAM PROVE
+DEFECTIVE, YOU ASSUME THE COST OF ALL NECESSARY SERVICING, REPAIR OR
+CORRECTION.
+
+  8. Limitation of Liability.
+
+  IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR A WRITTEN
+AGREEMENT WILL ANY COPYRIGHT HOLDER, OR ANY PARTY WHO MODIFIES AND/OR
+CONVEYS THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES,
+INCLUDING ANY GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES
+ARISING OUT OF THE USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT
+NOT LIMITED TO LOSS OF DATA OR DATA BEING RENDERED INACCURATE OR
+LOSSES SUSTAINED BY YOU OR THIRD PARTIES OR A FAILURE OF THE PROGRAM
+TO OPERATE WITH ANY OTHER PROGRAMS), EVEN IF SUCH HOLDER OR OTHER
+PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+  9. Acceptance of Warranty or Additional Liability.
+
+  If the acceptance of warranty or additional liability is required
+by the terms of this License, you may not convey the covered work
+unless you also offer to assume such warranty or liability on terms
+that are reasonable and consistent with this License.
