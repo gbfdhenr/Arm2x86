@@ -1,6 +1,7 @@
 # Arm2x86
 
 [![License](https://img.shields.io/badge/license-LGPL--3.0-blue.svg)](LICENSE)
+[中文文档](README_zh.md)
 
 Arm2x86 Native Bridge - ARM64/ARM32 to x86_64 Binary Translation Layer
 
@@ -337,4 +338,4 @@ Thanks to all contributors and users who make Arm2x86 possible!
 
 ---
 
-*Last updated: 2026-05-30*
+*Last updated: 2026-08-18*

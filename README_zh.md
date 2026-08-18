@@ -1,7 +1,7 @@
 # Arm2x86
 
 [![License](https://img.shields.io/badge/license-LGPL--3.0-blue.svg)](LICENSE)
-
+[English Document](README.md)
 Arm2x86 原生桥接层 - ARM64/ARM32 到 x86_64 二进制翻译层
 
 ## 概述
@@ -259,4 +259,4 @@ LGPL 许可证允许您：
 
 ---
 
-*最后更新：2026-05-30*
+*最后更新：2026-08-18*
