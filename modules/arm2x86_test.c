@@ -1,11 +1,11 @@
 /*
  * Arm2x86 Test Framework Implementation
- * 
+ *
  * Copyright (c) 2024 Arm2x86 Project
  * Licensed under LGPL-3.0
  */
 
-#include "arm2x86_test.h"
+#include "../include/arm2x86_test.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -66,17 +66,17 @@ int arm2x86_test_run_all(arm2x86_test_runner_t *runner)
     printf("========================================\n");
     printf("Arm2x86 Test Runner\n");
     printf("========================================\n");
-    
+
     runner->total_tests = 0;
     runner->total_passed = 0;
     runner->total_failed = 0;
     runner->total_skipped = 0;
     runner->total_time_ms = 0;
-    
+
     for (int i = 0; i < runner->suite_count; i++) {
-        arm2x86_test_suite_t *suite = &runner->suites[i];
+        arm2x86_test_suite_t *suite = runner->suites[i];
         
-        int ret = arm2x86_test_run_suite(suite);
+        arm2x86_test_run_suite(suite);
         
         runner->total_tests += suite->count;
         runner->total_passed += suite->passed;

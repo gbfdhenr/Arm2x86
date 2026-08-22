@@ -1,0 +1,27 @@
+# Build artifacts
+*.o
+*.so
+*.a
+*.dll
+*.dylib
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# MonkeyCode
+.monkeycode/
+
+# Qwen Code
+.qwen/
+
+# Backup files
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db

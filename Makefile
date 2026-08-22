@@ -28,7 +28,7 @@ $(TARGET): $(OBJ)
 test: $(TARGET) $(TEST_RUNNER)
 
 $(TEST_RUNNER): $(TEST_SRCS)
-	$(CC) $(CFLAGS) -I./include -I. -o $@ $^ -L. -larm2x86 $(LDLIBS)
+	$(CC) $(CFLAGS) -I./include -I. -o $@ $^ -L. -larm2x86 $(LDLIBS) -lrt
 
 # Run tests
 run-test: test

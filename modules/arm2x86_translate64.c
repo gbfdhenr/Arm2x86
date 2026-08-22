@@ -3862,6 +3862,7 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
     int instruction_count = 0;
 
     /* 打印前几条 ARM 指令用于调试 */
+#ifdef ARM2X86_DEBUG_TRANSLATION
     fprintf(stderr, "[ARM2X86-DBT] Translating ARM code at %p, size=%zu\n", (void *)arm64_code, arm64_size);
     fprintf(stderr, "[ARM2X86-DBT] First %d ARM instructions:\n", 5);
     for (int i = 0; i < 5 && src + 4 <= end; i++, src += 4) {
@@ -3869,6 +3870,7 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
         fprintf(stderr, "  [%d] 0x%08x at %p\n", i, arm_instr, (void *)src);
     }
     src = arm64_code;  /* 重置 src */
+#endif
 
     while (src < end && instruction_count < max_instructions) {
         uint32_t op = arm2x86_read_le32(src);
@@ -3876,10 +3878,12 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
         arm2x86_decode(ctx, src, &decoded);
         instruction_count++;
 
+#ifdef ARM2X86_DEBUG_TRANSLATION
         /* Debug: print ARM instruction and x86 offset before translation */
         size_t x86_offset_before = t.x86_cur - x86_buffer;
         fprintf(stderr, "[ARM2X86-DBG] ARM instr #%d @+%td: type=%d x86_off=%zu\n",
                 instruction_count, src - arm64_code, decoded.instr_type, x86_offset_before);
+#endif
 
         /* Detect basic block boundaries - stop at branch instructions
          * Basic blocks end at unconditional branches (B, BR, BLR, RET)
@@ -4154,6 +4158,7 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
     }
 
     *x86_size = t.x86_cur - x86_buffer;
+#ifdef ARM2X86_DEBUG_TRANSLATION
     
     /* 打印前 256 字节翻译后的 x86 代码 */
     fprintf(stderr, "[ARM2X86-DBT] Translated x86 code (first %zu bytes):\n", *x86_size < 256 ? *x86_size : 256);
@@ -4162,6 +4167,7 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
         if ((i + 1) % 16 == 0) fprintf(stderr, "\n");
     }
     fprintf(stderr, "\n");
+#endif
     
     free(t.reg_home);
     return ARM2X86_OK;

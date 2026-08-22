@@ -169,7 +169,8 @@ void arm2x86_perf_record_execution(bool cached, uint8_t instr_type)
         case INSTR_CBNZ:
             g_perf_stats.instr_count_branch++;
             break;
-        case INSTR_FMOV:
+        case INSTR_FMOV_REG:
+        case INSTR_FMOV_IMM:
         case INSTR_FADD:
         case INSTR_FSUB:
         case INSTR_FMUL:

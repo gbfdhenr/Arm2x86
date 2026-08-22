@@ -7,6 +7,7 @@
  */
 
 #include "arm2x86_test.h"
+#include "arm2x86_easy.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -21,17 +22,13 @@ int main(int argc, char *argv[])
     static arm2x86_test_suite_t *suites[MAX_SUITES];
     static arm2x86_test_runner_t runner = {0};
     
-    int suite_count = 0;
-    
     /* Collect all test suites */
     runner.verbose = 1;
+    runner.suites = suites;
     
     /* Register test suites */
     register_error_tests(&runner);
     register_cache_tests(&runner);
-    
-    runner.suites = suites[0];
-    runner.suite_count = suite_count;
     
     printf("\n");
     printf("============================================================\n");

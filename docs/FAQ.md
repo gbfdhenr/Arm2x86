@@ -75,25 +75,37 @@ docker run -it --rm -v $(pwd):/workspace arm2x86:latest
 
 ### Q: Arm2x86 的基本使用流程是什么？
 
-**A:** 典型的使用流程如下：
+**A:** 典型的使用流程如下（推荐使用新 Easy API）：
 
 ```c
 #include "arm2x86_easy.h"
 
 int main() {
-    // 1. 创建实例（自动初始化所有组件）
-    arm2x86_instance_t *arm2x86 = arm2x86_create_easy(NULL);
-    
+    // 1. 创建实例（自动初始化所有组件，启用所有优化）
+    arm2x86_easy_config_t config;
+    arm2x86_easy_config_default(&config);
+    config.cache_size_mb = 16;              // 16MB 翻译缓存
+    config.enable_perf = 1;                 // 启用性能监控
+    config.enable_mempool = 1;              // 启用内存池 (避免 mmap 开销)
+    config.mempool_initial_size = 2*1024*1024;    // 2MB 初始
+    config.mempool_max_size = 128*1024*1024;      // 128MB 最大
+    config.mempool_chunk_size = 512*1024;         // 512KB 分块
+    config.enable_persistent_cache = 1;   // 跨进程磁盘缓存
+    config.persistent_cache_size_mb = 200; // 200MB 磁盘缓存
+
+    arm2x86_instance_t *arm2x86 = arm2x86_create_easy(&config);
+
     // 2. 加载并翻译 ARM 代码
     void *arm_code = load_arm_binary("binary.so");
     void *x86_code = arm2x86_translate_easy(arm2x86, arm_code, code_size);
-    
-    // 3. 执行翻译后的代码
-    uint64_t result = arm2x86_execute_easy(arm2x86, x86_code, args, num_args);
-    
+
+    // 3. 执行翻译后的代码 (6 参数调用约定)
+    uint64_t args[6] = {arg0, arg1, arg2, arg3, arg4, arg5};
+    uint64_t result = arm2x86_execute_easy(arm2x86, x86_code, args, 6);
+
     // 4. 清理资源
     arm2x86_destroy_easy(arm2x86);
-    
+
     return 0;
 }
 ```
@@ -112,7 +124,7 @@ int main() {
 ```c
 arm2x86_easy_config_t config;
 arm2x86_easy_config_default(&config);
-config.cache_size_mb = 8;  // 8MB 缓存
+config.cache_size_mb = 16;  // 16MB 缓存
 ```
 
 ### Q: 如何启用/禁用 SIMD 优化？
@@ -153,7 +165,7 @@ make debug-all
 - `ARM2X86_DEBUG_CACHE` - 缓存调试
 - `ARM2X86_DEBUG_PERF` - 性能监控调试
 
-**GDB 调试:**
+**GDB 调试 (新增 GDB 插件):**
 ```bash
 gdb ./your_program
 (gdb) source tools/gdb_arm2x86.py
@@ -168,27 +180,44 @@ gdb ./your_program
 
 ### Q: 如何提高翻译性能？
 
-**A:** 以下优化策略：
+**A:** 以下优化策略（按效果排序）：
 
-1. **调整缓存大小**: 增加缓存可减少重复翻译
+1. **启用内存池** (最大收益): 避免每次 mmap/mprotect
    ```c
-   config.cache_size_mb = 16;
+   config.enable_mempool = 1;
+   config.mempool_initial_size = 2*1024*1024;    // 2MB 初始
+   config.mempool_max_size = 128*1024*1024;      // 128MB 最大
+   config.mempool_chunk_size = 512*1024;         // 512KB 分块
    ```
 
-2. **启用 SIMD 优化**: 
-   ```bash
-   cmake .. -DARM2X86_ENABLE_NEON=ON -DARM2X86_ENABLE_AVX=ON
+2. **启用缓存优先查找** (默认开启): 3 级缓存查找优于翻译
+   - L1: tcache (内存 LRU) - 0.055 µs
+   - L2: pcache (持久化磁盘缓存)
+   - L3: hash dedup (内容去重)
+
+3. **启用内容哈希去重** (默认开启): 相同代码只翻译一次
+   - 相同代码直接复用已翻译 x86 代码
+   - 100% 复用，0 开销
+
+4. **启用批量翻译**:
+   ```c
+   arm2x86_code_block_t blocks[100];
+   void *outputs[100];
+   // ... 填充 blocks ...
+   arm2x86_translate_batch(arm2x86, blocks, 100);
+   // 1000 个块批量翻译：16.5M/s 吞吐率
    ```
 
-3. **预热缓存**: 提前翻译热点代码块
+5. **启用 AOT 预翻译** (零启动开销):
+   ```c
+   arm2x86_aot_translate(&config);  // 构建/CI 阶段
+   arm2x86_load_aot_module(arm2x86, "libfoo.aot");  // 运行时零开销
+   ```
+
+5. **预热缓存**:
    ```c
    uintptr_t hot_addrs[] = {0x1000, 0x2000, 0x3000};
    arm2x86_warmup_cache(arm2x86, hot_addrs, 3);
-   ```
-
-4. **启用自适应缓存**:
-   ```c
-   config.enable_auto_cache_resize = 1;
    ```
 
 ### Q: 缓存命中率低怎么办？
@@ -196,7 +225,12 @@ gdb ./your_program
 **A:** 缓存命中率低可能是以下原因：
 
 1. **缓存过小**: 增加到 8-16MB
+   ```c
+   config.cache_size_mb = 16;
+   ```
+
 2. **代码块太大**: 考虑分块翻译
+
 3. **热点检测阈值过高**: 降低阈值
    ```c
    config.hot_threshold = 2;  // 默认 3
@@ -226,6 +260,11 @@ printf("Cache miss rate: %.2f%%\n", miss_rate * 100);
 3. **定期清理缓存**:
    ```c
    arm2x86_tcache_clear(ctx->tcache);
+   ```
+
+4. **限制内存池大小**:
+   ```c
+   config.mempool_max_size = 16 * 1024 * 1024;  // 限制 16MB
    ```
 
 ---
@@ -258,12 +297,13 @@ printf("Cache miss rate: %.2f%%\n", miss_rate * 100);
    config.debug_flags = ARM2X86_DEBUG_TRANSLATION | ARM2X86_DEBUG_DECODE;
    ```
 
-4. **使用 GDB 调试**:
+4. **使用 GDB 调试 (新增插件):**
    ```bash
    gdb ./program
-   (gdb) catch signal SIGSEGV
-   (gdb) run
-   (gdb) arm2x86 dump <address>
+   (gdb) source tools/gdb_arm2x86.py
+   (gdb) arm2x86 stats
+   (gdb) arm2x86 cache
+   (gdb) arm2x86 dump 0x12345678
    ```
 
 ### Q: 翻译性能突然下降
@@ -345,14 +385,21 @@ arm2x86_arm64_stat_to_x86(&arm_stat, &x86_stat);
    }
    ```
 
-3. **在 `modules/arm2x86_translate64.c` 中添加翻译逻辑**:
+2. **在 `modules/arm2x86_translate64.c` 中添加翻译逻辑**:
    ```c
    case INSTR_NEW:
        translate_new_instr(buf, instr);
        break;
    ```
 
-4. **添加测试用例**:
+3. **在 `modules/arm2x86_emit.c` 中添加 x86 生成**:
+   ```c
+   case INSTR_NEW:
+       emit_new_instr(buf, decoded);
+       break;
+   ```
+
+3. **添加测试用例**:
    ```c
    static int test_new_instr(void) {
        // 测试代码
@@ -367,7 +414,7 @@ arm2x86_arm64_stat_to_x86(&arm_stat, &x86_stat);
 2. 创建特性分支 (`git checkout -b feature/your-feature`)
 3. 提交更改 (`git commit -am 'Add new feature'`)
 4. 推送到分支 (`git push origin feature/your-feature`)
-5. 创建 Pull Request
+4. 创建 Pull Request
 
 ### Q: 如何运行测试？
 
@@ -405,10 +452,69 @@ ctest --output-on-failure
    perf report
    ```
 
-3. **使用 JIT 分析器**:
+3. **使用自带性能分析器**:
    ```bash
    ./tools/arm2x86_prof program
    ```
+
+4. **GDB 性能调试插件**:
+   ```bash
+   gdb ./program
+   (gdb) source tools/gdb_arm2x86.py
+   (gdb) arm2x86 stats
+   (gdb) arm2x86 cache
+   ```
+
+---
+
+## 新功能 FAQ
+
+### Q: 什么是内容哈希去重？
+
+**A:** 内容哈希去重通过计算 ARM 代码的 64-bit 哈希值，将相同内容的代码块映射到同一个翻译结果。相同的 ARM 代码只翻译一次，后续直接复用已翻译的 x86 代码。
+
+- **哈希算法**: XXH3 风格 64-bit
+- **表大小**: 4096 桶
+- **效果**: 100% 复用，0 开销
+
+### Q: 内存池如何工作？
+
+**A:** 内存池预分配大块 RWX 内存，按需切片分配：
+- **初始**: 1-2MB 预分配
+- **分块**: 256KB-512KB 可配置
+- **增长**: 按需扩展至最大值
+- **回退**: 池耗尽自动 `mmap`
+- **收益**: 消除 `mmap`/`mprotect` 系统调用
+
+### Q: 批量翻译何时使用？
+
+**A:** 适用场景：
+- 翻译大量小函数/基本块
+- 已知热点函数列表
+- 需要高吞吐率的批处理
+
+```c
+arm2x86_code_block_t blocks[100];
+void *outputs[100];
+for (int i = 0; i < 100; i++) {
+    blocks[i] = (arm2x86_code_block_t){code, size, addr+i*4, &outputs[i]};
+}
+arm2x86_translate_batch(arm2x86, blocks, 100);
+// 1000 个块：16.5M/s 吞吐率
+```
+
+### Q: AOT 预翻译有什么用？
+
+**A:** AOT (Ahead-Of-Time) 预翻译在构建/CI 阶段将整个 ARM 库预翻译为 x86 代码，运行时直接加载，实现 **零启动翻译开销**。
+
+```bash
+# 构建时
+arm2x86_aot_translate libfoo.so libfoo.aot
+
+# 运行时
+arm2x86_load_aot_module(arm2x86, "libfoo.aot");
+// 瞬间执行
+```
 
 ---
 
@@ -418,5 +524,6 @@ ctest --output-on-failure
 - [架构说明](ARCHITECTURE.md)
 - [性能调优指南](PERFORMANCE.md)
 - [使用说明](USAGE.md)
+- [测试指南](TESTING.md)
 
 如果问题未在此处解答，请提交 GitHub Issue 或查阅邮件列表。

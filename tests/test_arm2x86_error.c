@@ -9,6 +9,7 @@
 #include "arm2x86.h"
 #include "arm2x86_error.h"
 #include "arm2x86_easy.h"
+#include "modules/arm2x86_tcache.h"
 #include <string.h>
 
 /* Test error code definitions */
@@ -129,19 +130,19 @@ static int test_cache_resize(void)
     arm2x86_easy_config_t config;
     arm2x86_easy_config_default(&config);
     config.cache_size_mb = 1;
-    
+
     arm2x86_instance_t *arm2x86 = arm2x86_create_easy(&config);
     TEST_ASSERT_NOT_NULL(arm2x86);
-    
+
     /* Resize should succeed */
-    arm2x86_error_t err = arm2x86_tcache_resize(arm2x86->ctx->tcache, 2 * 1024 * 1024);
+    arm2x86_error_t err = arm2x86_tcache_resize(arm2x86->cache, 2 * 1024 * 1024);
     TEST_ASSERT_EQ(ARM2X86_OK, err);
-    
-    size_t usage = arm2x86_tcache_get_usage(arm2x86->ctx->tcache);
+
+    size_t usage = arm2x86_tcache_get_usage(arm2x86->cache);
     TEST_ASSERT(usage <= 2 * 1024 * 1024);
-    
+
     arm2x86_destroy_easy(arm2x86);
-    
+
     return TEST_PASS;
 }
 
@@ -194,7 +195,8 @@ void register_error_tests(arm2x86_test_runner_t *runner)
     TEST_ADD(&error_handling_suite, test_cache_resize);
     TEST_ADD(&error_handling_suite, test_simd_toggle);
     TEST_ADD(&error_handling_suite, test_version_api);
-    
-    runner->suites = &error_handling_suite;
-    runner->suite_count = 1;
+
+    if (runner->suite_count < 10) {
+        runner->suites[runner->suite_count++] = &error_handling_suite;
+    }
 }

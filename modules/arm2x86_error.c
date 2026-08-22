@@ -1,11 +1,11 @@
 /*
  * Arm2x86 Dynamic Binary Translator - Error Handling Implementation
- * 
+ *
  * Copyright (c) 2024 Arm2x86 Project
  * Licensed under LGPL-3.0
  */
 
-#include "arm2x86_error.h"
+#include "../include/arm2x86_error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>

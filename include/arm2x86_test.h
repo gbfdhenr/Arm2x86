@@ -9,6 +9,7 @@
 #ifndef ARM2X86_TEST_H
 #define ARM2X86_TEST_H
 
+#define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,7 +48,7 @@ typedef struct {
 
 /* Global test runner state */
 typedef struct {
-    arm2x86_test_suite_t *suites;
+    arm2x86_test_suite_t **suites;
     int suite_count;
     int total_tests;
     int total_passed;
@@ -62,18 +63,21 @@ typedef struct {
     static arm2x86_test_runner_t name = {0}; \
     name.verbose = 1
 
-#define TEST_SUITE_DEFINE(name) \
-    static arm2x86_test_t name##_tests[100]; \
-    static arm2x86_test_suite_t name##_suite = { \
-        .name = #name, \
-        .tests = name##_tests, \
+#define TEST_SUITE_DEFINE(suite_name) \
+    static arm2x86_test_t suite_name##_tests[100]; \
+    static arm2x86_test_suite_t suite_name##_suite = { \
+        .name = #suite_name, \
+        .tests = suite_name##_tests, \
         .count = 0 \
     }
 
 #define TEST_ADD(suite, test_func) \
-    suite->tests[suite->count].name = #test_func; \
-    suite->tests[suite->count].test = test_func; \
-    suite->count++
+    do { \
+        arm2x86_test_suite_t *s = (suite); \
+        s->tests[s->count].name = #test_func; \
+        s->tests[s->count].test = test_func; \
+        s->count++; \
+    } while (0)
 
 #define TEST_ASSERT(cond) \
     do { \

@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+.gitmodules
+.gitlab-ci.yml
+
+# Build artifacts
+build/
+*.o
+*.so
+*.a
+*.pc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+coverage/
+*.gcno
+*.gcda
+
+# Documentation
+*.md~
+doc/generated/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+monkeycode/
+.monkeycode/

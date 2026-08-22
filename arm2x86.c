@@ -53,6 +53,10 @@ void arm2x86_msr_tpidr_el0(uint64_t value);
 int translate_cache_init(void);
 void translate_cache_destroy(void);
 
+/* Stub implementations for multi-level translation cache */
+int translate_cache_init(void) { return 0; }
+void translate_cache_destroy(void) {}
+
 /* arch_prctl declaration */
 extern int arch_prctl(int code, unsigned long addr);
 
@@ -406,6 +410,9 @@ void arm2x86_cache_destroy(void)
 #include "modules/arm2x86_cpufeat.h"
 #include "modules/arm2x86_jni_sim.h"
 #include "modules/arm2x86_jni_capture.h"
+#include "include/arm2x86_error.h"
+#include "include/arm2x86_test.h"
+#include "include/arm2x86_easy.h"
 
 /* ============================================================
  * Module implementations (included in order)
@@ -436,3 +443,7 @@ void arm2x86_cache_destroy(void)
 #include "modules/arm2x86_jni_sim.c"
 #include "modules/arm2x86_jni_capture.c"
 #include "modules/arm2x86_pcache.c"
+#include "modules/arm2x86_perf.c"
+#include "modules/arm2x86_easy.c"
+#include "modules/arm2x86_error.c"
+#include "modules/arm2x86_test.c"

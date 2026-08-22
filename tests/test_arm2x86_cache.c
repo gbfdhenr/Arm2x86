@@ -22,21 +22,26 @@ static int cache_setup(void)
 
 static int cache_teardown(void)
 {
+    fflush(stdout);
     if (g_cache) {
         arm2x86_tcache_destroy(g_cache);
         g_cache = NULL;
     }
+    fflush(stdout);
     return TEST_PASS;
 }
 
 /* Test cache creation */
 static int test_cache_create_destroy(void)
 {
+    fflush(stdout);
     arm2x86_translation_cache_t *cache = arm2x86_tcache_create(2 * 1024 * 1024, 8192);
+    fflush(stdout);
     TEST_ASSERT_NOT_NULL(cache);
-    
+
     arm2x86_tcache_destroy(cache);
-    
+    fflush(stdout);
+
     return TEST_PASS;
 }
 
@@ -45,18 +50,18 @@ static int test_cache_insert_lookup(void)
 {
     uint8_t test_code[] = {0x00, 0x01, 0x02, 0x03};
     uintptr_t test_addr = 0x12345678;
-    
+
     int ret = arm2x86_tcache_insert(g_cache, test_addr, test_code, sizeof(test_code));
     TEST_ASSERT_EQ(ARM2X86_OK, ret);
-    
+
     arm2x86_tcache_entry_t *entry = arm2x86_tcache_lookup(g_cache, test_addr);
     TEST_ASSERT_NOT_NULL(entry);
     TEST_ASSERT_EQ(sizeof(test_code), arm2x86_tcache_get_size(entry));
-    
+
     uint8_t *code = arm2x86_tcache_get_code(entry);
     TEST_ASSERT_NOT_NULL(code);
     TEST_ASSERT(memcmp(code, test_code, sizeof(test_code)) == 0);
-    
+
     return TEST_PASS;
 }
 
@@ -139,23 +144,29 @@ static int test_cache_clear(void)
 /* Test miss rate calculation */
 static int test_cache_miss_rate(void)
 {
+    fflush(stderr);
     /* Cause some hits and misses */
     uint8_t test_code[] = {0x00};
     uintptr_t addr1 = 0x30000001;
     uintptr_t addr2 = 0x30000002;
-    
+
+    fflush(stderr);
     arm2x86_tcache_insert(g_cache, addr1, test_code, 1);
-    
-    /* Lookup addr1 (hit) */
+
+    fflush(stderr);
     arm2x86_tcache_lookup(g_cache, addr1);
+
+    fflush(stderr);
     arm2x86_tcache_lookup(g_cache, addr1);
-    
-    /* Lookup addr2 (miss) */
+
+    fflush(stderr);
     arm2x86_tcache_lookup(g_cache, addr2);
-    
+
+    fflush(stderr);
     double miss_rate = arm2x86_tcache_get_miss_rate(g_cache);
+    fflush(stderr);
     TEST_ASSERT(miss_rate >= 0.0 && miss_rate <= 1.0);
-    
+
     return TEST_PASS;
 }
 
@@ -175,11 +186,6 @@ TEST_SUITE_DEFINE(cache);
 
 void register_cache_tests(arm2x86_test_runner_t *runner)
 {
-    for (int i = 0; i < cache_suite.count; i++) {
-        cache_suite.tests[i].setup = cache_setup;
-        cache_suite.tests[i].teardown = cache_teardown;
-    }
-    
     TEST_ADD(&cache_suite, test_cache_create_destroy);
     TEST_ADD(&cache_suite, test_cache_insert_lookup);
     TEST_ADD(&cache_suite, test_cache_miss);
@@ -188,7 +194,13 @@ void register_cache_tests(arm2x86_test_runner_t *runner)
     TEST_ADD(&cache_suite, test_cache_clear);
     TEST_ADD(&cache_suite, test_cache_miss_rate);
     TEST_ADD(&cache_suite, test_cache_auto_resize);
-    
-    runner->suites = &cache_suite;
-    runner->suite_count = 1;
+
+    for (int i = 0; i < cache_suite.count; i++) {
+        cache_suite.tests[i].setup = cache_setup;
+        cache_suite.tests[i].teardown = cache_teardown;
+    }
+
+    if (runner->suite_count < 10) {
+        runner->suites[runner->suite_count++] = &cache_suite;
+    }
 }

@@ -7,24 +7,6 @@
 #define ARM2X86_DEBUG_TRANSLATION 0
 #endif
 
-/* ARM32 condition codes */
-#define ARM32_COND_EQ  0x0
-#define ARM32_COND_NE  0x1
-#define ARM32_COND_CS  0x2
-#define ARM32_COND_CC  0x3
-#define ARM32_COND_MI  0x4
-#define ARM32_COND_PL  0x5
-#define ARM32_COND_VS  0x6
-#define ARM32_COND_VC  0x7
-#define ARM32_COND_HI  0x8
-#define ARM32_COND_LS  0x9
-#define ARM32_COND_GE  0xa
-#define ARM32_COND_LT  0xb
-#define ARM32_COND_GT  0xc
-#define ARM32_COND_LE  0xd
-#define ARM32_COND_AL  0xe
-#define ARM32_COND_NV  0xf
-
 static const uint8_t arm32_to_x86_cond[16] = {
     0x84, /* EQ -> JZ  */
     0x85, /* NE -> JNZ */
@@ -264,8 +246,8 @@ static int translate_arm32_multiply(uint8_t **dst, uint32_t op)
     case 4: /* UMULL: RdLo = (Rn * Rm)[31:0], RdHi = (Rn * Rm)[63:32] */
     case 5: /* UMLAL: RdLo += (Rn * Rm)[31:0], RdHi += (Rn * Rm)[63:32] */
         /* Zero-extend to 64-bit and multiply */
-        movzx_r64_r32(dst, X86_REG_RAX, xrn);
-        movzx_r64_r32(dst, X86_REG_RCX, xrm);
+        emit_movzx(dst, 32, X86_REG_RAX, xrn);
+        emit_movzx(dst, 32, X86_REG_RCX, xrm);
         imul_r64_r64(dst, X86_REG_RAX, X86_REG_RCX);
         /* RAX = low 32 bits, RDX = high 32 bits */
         if (op_mul == 5) {
@@ -279,8 +261,8 @@ static int translate_arm32_multiply(uint8_t **dst, uint32_t op)
     case 6: /* SMULL: Signed multiply long */
     case 7: /* SMLAL: Signed multiply accumulate long */
         /* Sign-extend to 64-bit and multiply */
-        movsx_r64_r32(dst, X86_REG_RAX, xrn);
-        movsx_r64_r32(dst, X86_REG_RCX, xrm);
+        emit_movsx(dst, 32, X86_REG_RAX, xrn);
+        emit_movsx(dst, 32, X86_REG_RCX, xrm);
         imul_r64_r64(dst, X86_REG_RAX, X86_REG_RCX);
         if (op_mul == 7) {
             /* Accumulate */
