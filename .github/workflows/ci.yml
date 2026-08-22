@@ -1,0 +1,59 @@
+name: CI Build
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git
+
+      - name: Configure (CMake)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release .
+
+      - name: Build
+        run: |
+          cmake --build build -- -j$(nproc)
+
+      - name: Run Tests
+        run: |
+          cd build
+          LD_LIBRARY_PATH=. ./tests/run_tests
+
+      - name: Build (Makefile)
+        run: |
+          make clean
+          make -j$(nproc)
+
+      - name: Run Tests (Makefile)
+        run: |
+          make test
+
+      - name: Build Shared Library
+        run: |
+          ls -la libarm2x86.so
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arm2x86-build
+          path: |
+            libarm2x86.so
+            build/
+          retention-days: 7
