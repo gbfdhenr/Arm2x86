@@ -8,6 +8,7 @@
  * ============================================================ */
 
 #include <string.h>
+#include "arm2x86_peephole.h"
 
 /* ARM64 -> x86_64 condition code mapping */
 static const uint8_t arm64_to_x86_cond[16] = {
@@ -70,7 +71,39 @@ static inline void emit_store_arm_reg(uint8_t **x86_cur, uint8_t x86_reg, uint8_
 }
 
 /* ============================================================
- * TranslateCtx - Extended with register home and PC mapping
+ * Register Allocation - Linear Scan
+ * ============================================================ */
+
+/* x86_64 registers available for ARM register allocation (caller-saved) */
+#define REG_ALLOC_COUNT 9
+static const uint8_t reg_alloc_map[REG_ALLOC_COUNT] = {
+    X86_REG_RAX, X86_REG_RCX, X86_REG_RDX, X86_REG_RSI,
+    X86_REG_RDI, X86_REG_R8,  X86_REG_R9,  X86_REG_R10, X86_REG_R11
+};
+
+/* ARM register priority for allocation (higher = more likely to stay in register) */
+/* X0-X7: args/returns, X8: temp, X9-X15: temporaries, X29: FP, X30: LR */
+static const uint8_t arm_reg_priority[32] = {
+    100, 100, 90, 90, 80, 80, 70, 70,  /* X0-X7: args/returns */
+    60, 50, 50, 50, 50, 50, 50, 50,    /* X8-X15: temps */
+    40, 40, 40, 40, 40, 40, 40, 40,    /* X16-X23: temps */
+    30, 30, 30, 30, 30, 30, 30, 30,    /* X24-X31: temps/SP/FP/LR */
+};
+
+/* Register allocation state */
+typedef struct {
+    uint8_t x86_reg;           /* Assigned x86 register (0-15), 0xff = in memory */
+    uint8_t arm_reg;           /* ARM register number (0-31) */
+    int     live_start;        /* Instruction index where live range starts */
+    int     live_end;          /* Instruction index where live range ends */
+    bool    dirty;             /* Modified, needs store to memory */
+    bool    is_64bit;          /* 64-bit value */
+} RegAllocEntry;
+
+#define MAX_LIVE_RANGES 64
+
+/* ============================================================
+ * TranslateCtx - Extended with register allocation
  * ============================================================ */
 typedef struct {
     arm2x86_Context *ctx;
@@ -79,17 +112,26 @@ typedef struct {
     uint8_t *x86_base;               /* Base of x86 output buffer */
     uint8_t *x86_cur;                /* Current x86 emission pointer */
     uint8_t *reg_home;               /* Memory area for ARM registers (256 bytes) */
-    
+
+    /* Register Allocation State */
+    RegAllocEntry reg_alloc[32];     /* Per-ARM register allocation state */
+    RegAllocEntry live_ranges[MAX_LIVE_RANGES];
+    int live_range_count;
+    int current_instr_idx;           /* Current instruction index for live ranges */
+    uint8_t free_regs[REG_ALLOC_COUNT];  /* Stack of free x86 registers */
+    int free_reg_count;
+    bool reg_alloc_enabled;          /* Enable register allocation */
+
     /* PC Mapping: ARM PC -> x86 PC (for branch targets) */
     struct {
         uint64_t arm_pc;
         uint8_t *x86_pc;
     } pc_map[256];
     int pc_map_count;
-    
+
     /* Dispatcher info */
     uint8_t *dispatcher_entry;       /* Entry point for dispatcher */
-    
+
     /* Exclusive monitor state for LDXR/STXR */
     struct {
         uint64_t addr;
@@ -119,11 +161,10 @@ static uint8_t *pc_map_lookup(TranslateCtx *t, uint64_t arm_pc)
     return NULL;
 }
 
-/* Helper: Emit call to dispatcher for uncompiled target */
 static void emit_dispatch_to(TranslateCtx *t, uint64_t arm_target)
 {
     uint8_t *p = t->x86_cur;
-    
+
     /* Check if target is already translated */
     uint8_t *x86_target = pc_map_lookup(t, arm_target);
     if (x86_target) {
@@ -146,7 +187,338 @@ static void emit_dispatch_to(TranslateCtx *t, uint64_t arm_target)
     t->x86_cur = p;
 }
 
-/* Forward declarations for NEON translation functions */
+/* ============================================================
+ * Direct-Threaded Dispatcher
+ * ============================================================ */
+
+/* Dispatcher entry - uses a jump table for fast dispatch */
+#define DISPATCHER_TABLE_SIZE 65536
+
+typedef struct {
+    uint64_t arm_pc;          /* ARM PC this entry corresponds to */
+    uint8_t *x86_code;        /* Translated x86 code (NULL if not translated) */
+    bool valid;               /* Whether this entry is valid */
+} DispatcherEntry;
+
+/* Global dispatcher table */
+static DispatcherEntry g_dispatcher_table[DISPATCHER_TABLE_SIZE];
+static bool g_dispatcher_initialized = false;
+
+/* Initialize dispatcher table */
+static void dispatcher_init(void)
+{
+    if (g_dispatcher_initialized) return;
+    memset(g_dispatcher_table, 0, sizeof(g_dispatcher_table));
+    g_dispatcher_initialized = true;
+}
+
+/* Hash ARM PC to dispatcher table index */
+static inline uint16_t dispatcher_hash(uint64_t arm_pc)
+{
+    return (uint16_t)(arm_pc ^ (arm_pc >> 16));
+}
+
+/* Look up dispatcher entry for ARM PC */
+static DispatcherEntry *dispatcher_lookup(uint64_t arm_pc)
+{
+    dispatcher_init();
+    uint16_t idx = dispatcher_hash(arm_pc);
+    return &g_dispatcher_table[idx];
+}
+
+/* Register translated code in dispatcher table */
+static void dispatcher_register(uint64_t arm_pc, uint8_t *x86_code)
+{
+    DispatcherEntry *entry = dispatcher_lookup(arm_pc);
+    entry->arm_pc = arm_pc;
+    entry->x86_code = x86_code;
+    entry->valid = true;
+}
+
+/* Assembly stub for dispatcher entry - this will be generated at runtime */
+extern void dispatcher_asm_stub(void);
+
+/* Initialize register allocator */
+static void reg_alloc_init(TranslateCtx *t)
+{
+    t->free_reg_count = REG_ALLOC_COUNT;
+    for (int i = 0; i < REG_ALLOC_COUNT; i++) {
+        t->free_regs[i] = reg_alloc_map[i];
+    }
+    t->live_range_count = 0;
+    t->current_instr_idx = 0;
+    t->reg_alloc_enabled = true;
+
+    for (int i = 0; i < 32; i++) {
+        t->reg_alloc[i].x86_reg = 0xff;
+        t->reg_alloc[i].arm_reg = i;
+        t->reg_alloc[i].live_start = -1;
+        t->reg_alloc[i].live_end = -1;
+        t->reg_alloc[i].dirty = false;
+        t->reg_alloc[i].is_64bit = true;
+    }
+}
+
+/* Allocate a free x86 register */
+static uint8_t reg_alloc_get_free(TranslateCtx *t)
+{
+    if (t->free_reg_count == 0) return 0xff;
+    return t->free_regs[--t->free_reg_count];
+}
+
+/* Return an x86 register to the free pool */
+static void reg_alloc_free(TranslateCtx *t, uint8_t x86_reg)
+{
+    if (t->free_reg_count < REG_ALLOC_COUNT) {
+        t->free_regs[t->free_reg_count++] = x86_reg;
+    }
+}
+
+/* Assign an x86 register to an ARM register */
+static void reg_alloc_assign(TranslateCtx *t, uint8_t arm_reg, uint8_t x86_reg, bool is_64bit)
+{
+    t->reg_alloc[arm_reg].x86_reg = x86_reg;
+    t->reg_alloc[arm_reg].is_64bit = is_64bit;
+    t->reg_alloc[arm_reg].dirty = false;
+}
+
+/* Get the x86 register holding an ARM register, or allocate one */
+static uint8_t reg_alloc_get_reg(TranslateCtx *t, uint8_t arm_reg, bool is_64bit, bool mark_dirty)
+{
+    uint8_t x86_reg = t->reg_alloc[arm_reg].x86_reg;
+    if (x86_reg != 0xff) {
+        if (mark_dirty) t->reg_alloc[arm_reg].dirty = true;
+        return x86_reg;
+    }
+
+    /* Need to allocate - try to get a free register */
+    x86_reg = reg_alloc_get_free(t);
+    if (x86_reg != 0xff) {
+        reg_alloc_assign(t, arm_reg, x86_reg, is_64bit);
+        /* Load from memory into register */
+        emit_load_arm_reg(&t->x86_cur, arm_reg, x86_reg, is_64bit);
+        if (mark_dirty) t->reg_alloc[arm_reg].dirty = true;
+        return x86_reg;
+    }
+
+    /* No free registers - spill lowest priority allocated register */
+    int spill_idx = -1;
+    uint8_t min_priority = 255;
+    for (int i = 0; i < 32; i++) {
+        if (t->reg_alloc[i].x86_reg != 0xff && arm_reg_priority[i] < min_priority) {
+            min_priority = arm_reg_priority[i];
+            spill_idx = i;
+        }
+    }
+
+    if (spill_idx >= 0) {
+        /* Spill the register */
+        if (t->reg_alloc[spill_idx].dirty) {
+            emit_store_arm_reg(&t->x86_cur, t->reg_alloc[spill_idx].x86_reg, spill_idx, t->reg_alloc[spill_idx].is_64bit);
+        }
+        uint8_t spilled_x86 = t->reg_alloc[spill_idx].x86_reg;
+        t->reg_alloc[spill_idx].x86_reg = 0xff;
+        reg_alloc_free(t, spilled_x86);
+
+        /* Allocate to requested register */
+        x86_reg = reg_alloc_get_free(t);
+        if (x86_reg != 0xff) {
+            reg_alloc_assign(t, arm_reg, x86_reg, is_64bit);
+            emit_load_arm_reg(&t->x86_cur, arm_reg, x86_reg, is_64bit);
+            if (mark_dirty) t->reg_alloc[arm_reg].dirty = true;
+            return x86_reg;
+        }
+    }
+
+    /* Fallback: use RAX (always available for temporaries) */
+    return X86_REG_RAX;
+}
+
+/* Ensure an ARM register is in a specific x86 register (for calling convention) */
+static void reg_alloc_ensure_fixed(TranslateCtx *t, uint8_t arm_reg, uint8_t x86_reg, bool is_64bit)
+{
+    uint8_t current = t->reg_alloc[arm_reg].x86_reg;
+    if (current == x86_reg) return;
+
+    /* If another ARM register is in the target x86 register, spill it */
+    for (int i = 0; i < 32; i++) {
+        if (t->reg_alloc[i].x86_reg == x86_reg && i != arm_reg) {
+            if (t->reg_alloc[i].dirty) {
+                emit_store_arm_reg(&t->x86_cur, x86_reg, i, t->reg_alloc[i].is_64bit);
+            }
+            t->reg_alloc[i].x86_reg = 0xff;
+            reg_alloc_free(t, x86_reg);
+            break;
+        }
+    }
+
+    /* If requested ARM register is already in a register, free it */
+    uint8_t old_x86 = t->reg_alloc[arm_reg].x86_reg;
+    if (old_x86 != 0xff) {
+        if (t->reg_alloc[arm_reg].dirty) {
+            emit_store_arm_reg(&t->x86_cur, old_x86, arm_reg, t->reg_alloc[arm_reg].is_64bit);
+        }
+        reg_alloc_free(t, old_x86);
+    }
+
+    reg_alloc_assign(t, arm_reg, x86_reg, true);
+    emit_load_arm_reg(&t->x86_cur, arm_reg, x86_reg, true);
+}
+
+/* Spill all dirty registers to memory */
+static void reg_alloc_spill_all(TranslateCtx *t)
+{
+    for (int i = 0; i < 32; i++) {
+        if (t->reg_alloc[i].x86_reg != 0xff && t->reg_alloc[i].dirty) {
+            emit_store_arm_reg(&t->x86_cur, t->reg_alloc[i].x86_reg, i, t->reg_alloc[i].is_64bit);
+            t->reg_alloc[i].dirty = false;
+        }
+    }
+}
+
+/* Spill specific ARM register if dirty */
+static void reg_alloc_spill(TranslateCtx *t, uint8_t arm_reg)
+{
+    if (t->reg_alloc[arm_reg].x86_reg != 0xff && t->reg_alloc[arm_reg].dirty) {
+        emit_store_arm_reg(&t->x86_cur, t->reg_alloc[arm_reg].x86_reg, arm_reg, t->reg_alloc[arm_reg].is_64bit);
+        t->reg_alloc[arm_reg].dirty = false;
+    }
+}
+
+/* Free an ARM register (return its x86 register to pool) */
+static void reg_alloc_release(TranslateCtx *t, uint8_t arm_reg)
+{
+    uint8_t x86_reg = t->reg_alloc[arm_reg].x86_reg;
+    if (x86_reg != 0xff) {
+        if (t->reg_alloc[arm_reg].dirty) {
+            emit_store_arm_reg(&t->x86_cur, x86_reg, arm_reg, t->reg_alloc[arm_reg].is_64bit);
+        }
+        t->reg_alloc[arm_reg].x86_reg = 0xff;
+        t->reg_alloc[arm_reg].dirty = false;
+        reg_alloc_free(t, x86_reg);
+    }
+}
+
+/* ============================================================
+ * Batch Load/Store at Basic Block Boundaries
+ * ============================================================ */
+
+/* Emit batch load of live-in registers at block entry */
+static void reg_alloc_emit_batch_load(TranslateCtx *t, uint8_t *live_regs, int count)
+{
+    for (int i = 0; i < count; i++) {
+        uint8_t arm_reg = live_regs[i];
+        if (t->reg_alloc[arm_reg].x86_reg != 0xff) {
+            emit_load_arm_reg(&t->x86_cur, arm_reg, t->reg_alloc[arm_reg].x86_reg, t->reg_alloc[arm_reg].is_64bit);
+        }
+    }
+}
+
+/* Emit batch store of live-out registers at block exit */
+static void reg_alloc_emit_batch_store(TranslateCtx *t, uint8_t *live_regs, int count)
+{
+    for (int i = 0; i < count; i++) {
+        uint8_t arm_reg = live_regs[i];
+        if (t->reg_alloc[arm_reg].x86_reg != 0xff && t->reg_alloc[arm_reg].dirty) {
+            emit_store_arm_reg(&t->x86_cur, t->reg_alloc[arm_reg].x86_reg, arm_reg, t->reg_alloc[arm_reg].is_64bit);
+            t->reg_alloc[arm_reg].dirty = false;
+        }
+    }
+}
+
+/* Compute live registers at block boundaries (simple heuristic) */
+static int reg_alloc_compute_live_in(TranslateCtx *t, uint8_t *live_regs)
+{
+    int count = 0;
+    /* For now, use simple heuristic: X0-X15 are typically live at block entry */
+    for (int i = 0; i < 16 && count < 32; i++) {
+        if (t->reg_alloc[i].x86_reg != 0xff) {
+            live_regs[count++] = i;
+        }
+    }
+    return count;
+}
+
+static int reg_alloc_compute_live_out(TranslateCtx *t, uint8_t *live_regs)
+{
+    int count = 0;
+    /* For now, use simple heuristic: X0-X7 are typically live at block exit */
+    for (int i = 0; i < 8 && count < 32; i++) {
+        if (t->reg_alloc[i].x86_reg != 0xff) {
+            live_regs[count++] = i;
+        }
+    }
+    return count;
+}
+
+/* ============================================================
+ * Branch Instructions - FIXED with PC Mapping
+ * ============================================================ */
+
+static int translate_b(TranslateCtx *t, uint32_t op)
+{
+    int32_t imm = arm2x86_sign_extend((op & 0x03ffffff) << 2, 28);
+    /* translate_b implementation would go here */
+    return ARM2X86_OK;
+}
+
+/* Setup calling convention: X0-X7 in RDI,RSI,RDX,RCX,R8,R9, R10,R11 */
+static void reg_alloc_setup_calling_convention(TranslateCtx *t)
+{
+    static const uint8_t arg_regs[8] = {
+        X86_REG_RDI, X86_REG_RSI, X86_REG_RDX, X86_REG_RCX,
+        X86_REG_R8,  X86_REG_R9,  X86_REG_R10, X86_REG_R11
+    };
+
+    for (int i = 0; i < 8; i++) {
+        uint8_t arm_reg = i;  /* X0-X7 */
+        uint8_t x86_reg = arg_regs[i];
+        uint8_t current = t->reg_alloc[arm_reg].x86_reg;
+        if (current != x86_reg) {
+            /* Spill current occupant if any */
+            for (int j = 0; j < 32; j++) {
+                if (t->reg_alloc[j].x86_reg == x86_reg && j != arm_reg) {
+                    if (t->reg_alloc[j].dirty) {
+                        emit_store_arm_reg(&t->x86_cur, x86_reg, j, t->reg_alloc[j].is_64bit);
+                    }
+                    t->reg_alloc[j].x86_reg = 0xff;
+                    reg_alloc_free(t, x86_reg);
+                    break;
+                }
+            }
+            if (t->reg_alloc[arm_reg].x86_reg != 0xff && t->reg_alloc[arm_reg].x86_reg != x86_reg) {
+                if (t->reg_alloc[arm_reg].dirty) {
+                    emit_store_arm_reg(&t->x86_cur, t->reg_alloc[arm_reg].x86_reg, arm_reg, t->reg_alloc[arm_reg].is_64bit);
+                }
+                reg_alloc_free(t, t->reg_alloc[arm_reg].x86_reg);
+            }
+            reg_alloc_assign(t, arm_reg, x86_reg, true);
+            emit_load_arm_reg(&t->x86_cur, arm_reg, x86_reg, true);
+        }
+    }
+
+    /* X29 (FP) -> RBP, X30 (LR) -> special handling */
+    reg_alloc_ensure_fixed(t, 29, X86_REG_RBP, true);
+}
+
+/* Restore registers after call */
+static void reg_alloc_restore_after_call(TranslateCtx *t)
+{
+    /* Caller-saved registers may have been clobbered */
+    /* Reload any registers we care about */
+    for (int i = 0; i < 8; i++) {
+        if (t->reg_alloc[i].x86_reg != 0xff) {
+            emit_load_arm_reg(&t->x86_cur, i, t->reg_alloc[i].x86_reg, t->reg_alloc[i].is_64bit);
+        }
+    }
+    /* RBP (X29) should be preserved by callee */
+    if (t->reg_alloc[29].x86_reg != X86_REG_RBP) {
+        reg_alloc_ensure_fixed(t, 29, X86_REG_RBP, true);
+    }
+}
+
+/* ============================================================
+ * Forward declarations for NEON translation functions */
 static int translate_neon_add(TranslateCtx *t, uint32_t op);
 static int translate_neon_sub(TranslateCtx *t, uint32_t op);
 static int translate_neon_mul(TranslateCtx *t, uint32_t op);
@@ -212,30 +584,6 @@ static inline uint8_t get_xreg(TranslateCtx *t, uint8_t arm64_reg)
         return X86_REG_R11;
     }
     return arm2x86_map_register(arm64_reg);
-}
-
-/* ============================================================
- * Branch Instructions - FIXED with PC Mapping
- * 
- * Key Design:
- * - All branches use PC mapping to find translated x86 targets
- * - If target not translated, generate dispatcher call stub
- * - BL saves return address in LR (X30) in register home
- * ============================================================ */
-
-static int translate_b(TranslateCtx *t, uint32_t op)
-{
-    int32_t imm = arm2x86_sign_extend((op & 0x03ffffff) << 2, 28);
-    uint64_t arm_src = (uint64_t)(uintptr_t)(t->arm64_cur);
-    uint64_t arm_target = arm_src + imm;
-    
-    /* Record PC mapping for this instruction */
-    uint8_t *x86_start = t->x86_cur;
-    pc_map_add(t, t->arm64_cur, x86_start);
-    
-    /* Generate jump to translated target or dispatcher */
-    emit_dispatch_to(t, arm_target);
-    return ARM2X86_OK;
 }
 
 static int translate_bl(TranslateCtx *t, uint32_t op)
@@ -332,18 +680,19 @@ static int translate_blr(TranslateCtx *t, uint32_t op)
 static int translate_ret(TranslateCtx *t, uint32_t op)
 {
     uint8_t rn = (op >> 5) & 0x1f;
-    
+
     /* Record PC mapping */
     uint8_t *x86_start = t->x86_cur;
     pc_map_add(t, t->arm64_cur, x86_start);
-    
+
     if (rn == 30) {
-        /* Return from subroutine: load LR and dispatch */
-        /* The LR contains an ARM address, need to translate */
-        emit_load_arm_reg(&t->x86_cur, 30, X86_REG_RAX, 1);
-        emit_dispatch_to(t, 0);  /* Will use RAX value */
+        /* Return from subroutine (LR = X30).
+         * Do NOT emit RET here - let the epilogue handle the return.
+         * The epilogue will load X0 into RAX and return.
+         * We just need to ensure we fall through to the epilogue.
+         */
     } else {
-        /* Indirect return from register */
+        /* Indirect return from register - load target and jump */
         emit_load_arm_reg(&t->x86_cur, rn, X86_REG_RAX, 1);
         emit_dispatch_to(t, 0);
     }
@@ -493,20 +842,39 @@ static int translate_add_sub(TranslateCtx *t, uint32_t op, int is_sub)
     /* Record PC mapping */
     pc_map_add(t, t->arm64_cur, t->x86_cur);
 
-    /* Load Rn into RAX */
-    emit_load_arm_reg(&t->x86_cur, rn, X86_REG_RAX, is_64bit);
+    /* Get registers from allocator */
+    uint8_t reg_rn = reg_alloc_get_reg(t, rn, is_64bit, false);
+    uint8_t reg_rm = reg_alloc_get_reg(t, rm, is_64bit, false);
+    uint8_t reg_rd = reg_alloc_get_reg(t, rd, is_64bit, true);
 
-    /* Load Rm into R11 */
-    emit_load_arm_reg(&t->x86_cur, rm, X86_REG_R11, is_64bit);
-
-    /* Perform operation: RAX = RAX +/- R11 */
+    /* Perform operation: reg_rd = reg_rn +/- reg_rm */
     if (is_sub)
-        sub_r64_r64(&t->x86_cur, X86_REG_RAX, X86_REG_R11);
+        sub_r64_r64(&t->x86_cur, reg_rd, reg_rm);
     else
-        add_r64_r64(&t->x86_cur, X86_REG_RAX, X86_REG_R11);
+        add_r64_r64(&t->x86_cur, reg_rd, reg_rm);
 
-    /* Store result to Rd */
-    emit_store_arm_reg(&t->x86_cur, X86_REG_RAX, rd, is_64bit);
+    /* If result is in different register than source, move it */
+    if (reg_rd != reg_rn && reg_rd != reg_rm) {
+        /* Result already in reg_rd from allocator, but we need to copy from reg_rn */
+        mov_r64_r64(&t->x86_cur, reg_rd, reg_rn);
+        if (is_sub)
+            sub_r64_r64(&t->x86_cur, reg_rd, reg_rm);
+        else
+            add_r64_r64(&t->x86_cur, reg_rd, reg_rm);
+    } else if (reg_rd == reg_rn) {
+        /* Result in same reg as rn, just do the operation */
+        if (is_sub)
+            sub_r64_r64(&t->x86_cur, reg_rd, reg_rm);
+        else
+            add_r64_r64(&t->x86_cur, reg_rd, reg_rm);
+    } else { /* reg_rd == reg_rm */
+        /* Need to copy rn first, then operate */
+        mov_r64_r64(&t->x86_cur, reg_rd, reg_rn);
+        if (is_sub)
+            sub_r64_r64(&t->x86_cur, reg_rd, reg_rm);
+        else
+            add_r64_r64(&t->x86_cur, reg_rd, reg_rm);
+    }
 
     return ARM2X86_OK;
 }
@@ -522,31 +890,31 @@ static int translate_logical(TranslateCtx *t, uint32_t op)
     /* Record PC mapping */
     pc_map_add(t, t->arm64_cur, t->x86_cur);
 
-    /* Load Rn into RAX */
-    emit_load_arm_reg(&t->x86_cur, rn, X86_REG_RAX, is_64bit);
-
-    /* Load Rm into R11 */
-    emit_load_arm_reg(&t->x86_cur, rm, X86_REG_R11, is_64bit);
+    /* Get registers from allocator */
+    uint8_t reg_rn = reg_alloc_get_reg(t, rn, is_64bit, false);
+    uint8_t reg_rm = reg_alloc_get_reg(t, rm, is_64bit, false);
+    uint8_t reg_rd = reg_alloc_get_reg(t, rd, is_64bit, true);
 
     switch (opcode) {
-    case 0: /* AND */
-        and_r64_r64(&t->x86_cur, X86_REG_RAX, X86_REG_R11);
+    case 0: /* AND: rd = rn & rm */
+        if (reg_rd != reg_rn) mov_r64_r64(&t->x86_cur, reg_rd, reg_rn);
+        and_r64_r64(&t->x86_cur, reg_rd, reg_rm);
         break;
-    case 1: /* BIC - AND NOT */
-        not_r64(&t->x86_cur, X86_REG_R11);
-        and_r64_r64(&t->x86_cur, X86_REG_RAX, X86_REG_R11);
+    case 1: /* BIC: rd = rn & ~rm */
+        if (reg_rd != reg_rn) mov_r64_r64(&t->x86_cur, reg_rd, reg_rn);
+        not_r64(&t->x86_cur, reg_rm);
+        and_r64_r64(&t->x86_cur, reg_rd, reg_rm);
         break;
-    case 2: /* ORR */
-        or_r64_r64(&t->x86_cur, X86_REG_RAX, X86_REG_R11);
+    case 2: /* ORR: rd = rn | rm */
+        if (reg_rd != reg_rn) mov_r64_r64(&t->x86_cur, reg_rd, reg_rn);
+        or_r64_r64(&t->x86_cur, reg_rd, reg_rm);
         break;
-    case 3: /* ORN - OR NOT */
-        not_r64(&t->x86_cur, X86_REG_R11);
-        or_r64_r64(&t->x86_cur, X86_REG_RAX, X86_REG_R11);
+    case 3: /* ORN: rd = rn | ~rm */
+        if (reg_rd != reg_rn) mov_r64_r64(&t->x86_cur, reg_rd, reg_rn);
+        not_r64(&t->x86_cur, reg_rm);
+        or_r64_r64(&t->x86_cur, reg_rd, reg_rm);
         break;
     }
-
-    /* Store result to Rd */
-    emit_store_arm_reg(&t->x86_cur, X86_REG_RAX, rd, is_64bit);
 
     return ARM2X86_OK;
 }
@@ -3729,7 +4097,7 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
     t.arm64_cur = arm64_code;  /* CRITICAL #5: 初始化 ARM 指令指针 */
     t.x86_base = x86_buffer;
     t.x86_cur = x86_buffer;
-    
+
     /* 分配寄存器家区域 - 256 字节用于存储 ARM X0-X31 */
     t.reg_home = malloc(ARM_REG_AREA_SIZE);
     if (!t.reg_home) {
@@ -3747,56 +4115,6 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
     /* x86_64 中没有 movk，但可以用 mov [rbp+offset], imm32 然后加载 */
     /* 最简单：mov rbp, qword [rip + data_offset] */
     
-    /* 当前使用直接 mov imm64（如果地址 < 2^32 则使用 32 位）*/
-    uint64_t reg_home_addr = (uint64_t)(uintptr_t)t.reg_home;
-    
-    /* 尝试使用 32 位 mov（零扩展）*/
-    if (reg_home_addr < 0x100000000ULL) {
-        /* 地址在低 32 位，mov ebp, imm32 即可 */
-        emit_byte(&t.x86_cur, 0xbf);  /* mov edi, imm32 - 不对！*/
-        /* mov rbp, imm32 (zero-extended): 48 c7 c5 <imm32> - 也不对！*/
-        /* 正确：mov ebp, imm32 = BD <imm32>，这会将高 32 位清零 */
-        emit_byte(&t.x86_cur, 0xbd);
-        emit_imm32(&t.x86_cur, (uint32_t)reg_home_addr);
-    } else {
-        /* 需要 64 位地址：使用 mov rbp, qword [rip + offset] */
-        /* 我们把地址放在指令后面，然后 RIP-relative 加载 */
-        /* 但这样复杂，简单方法：push + pop */
-        /* push imm64 不存在，所以用：*/
-        /* mov rax, imm64 (48 B8 <8 bytes>), then mov rbp, rax (48 89 C5) */
-        emit_byte(&t.x86_cur, 0x48);  /* REX.W */
-        emit_byte(&t.x86_cur, 0xb8);  /* mov rax, imm64 */
-        uint8_t *p = t.x86_cur;
-        *(uint64_t *)p = reg_home_addr;
-        t.x86_cur = p + 8;
-        /* mov rbp, rax */
-        emit_byte(&t.x86_cur, 0x48);
-        emit_byte(&t.x86_cur, 0x89);
-        emit_byte(&t.x86_cur, 0xc5);  /* modrm: mod=3, reg=0(RAX), rm=5(RBP) */
-    }
-
-    /* CRITICAL: Initialize register home area with actual ARM register state.
-     * ARM calling convention: X0-X3 are arguments (from x86 RDI, RSI, RDX, RCX)
-     * X4-X7 are caller-saved (from x86 R8, R9, R10, R11)
-     * X8 is indirect return / temp register (from x86 RAX - but RAX is used for reg_home addr)
-     * X29 (FP) should be set from x86 RBP
-     * X30 (LR) should be set to return address (from [rsp])
-     * X31 (SP) should be set to current x86 RSP
-     * 
-     * We generate code at the beginning of the translation block:
-     *   mov [rbp + ARM_REG_OFFSET(31)], rsp   ; Initialize SP
-     *   mov [rbp + ARM_REG_OFFSET(0)], rdi    ; Initialize X0
-     *   mov [rbp + ARM_REG_OFFSET(1)], rsi    ; Initialize X1
-     *   mov [rbp + ARM_REG_OFFSET(2)], rdx    ; Initialize X2
-     *   mov [rbp + ARM_REG_OFFSET(3)], rcx    ; Initialize X3
-     *   mov [rbp + ARM_REG_OFFSET(4)], r8     ; Initialize X4
-     *   mov [rbp + ARM_REG_OFFSET(5)], r9     ; Initialize X5
-     *   mov [rbp + ARM_REG_OFFSET(6)], r10    ; Initialize X6
-     *   mov [rbp + ARM_REG_OFFSET(7)], r11    ; Initialize X7
-     *   mov [rbp + ARM_REG_OFFSET(29)], rbp   ; Initialize X29 (FP)
-     */
-    
-    /* mov [rbp + ARM_REG_OFFSET(31)], rsp */
     emit_byte(&t.x86_cur, 0x48);  /* REX.W */
     emit_byte(&t.x86_cur, 0x89);
     modrm(&t.x86_cur, 2, 4 & 7, 5);  /* mod=2, reg=RSP(4), rm=5 => [RBP+disp32] */
@@ -3855,6 +4173,17 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
     emit_byte(&t.x86_cur, 0x89);
     modrm(&t.x86_cur, 2, X86_REG_RBP & 7, 5);
     emit_imm32(&t.x86_cur, ARM_REG_OFFSET(29));
+
+    /* Initialize register allocator */
+    reg_alloc_init(&t);
+
+    /* Setup calling convention: X0-X7 in RDI,RSI,RDX,RCX,R8,R9,R10,R11 */
+    reg_alloc_setup_calling_convention(&t);
+
+    /* Emit batch load for live-in registers at block entry */
+    uint8_t live_in[32];
+    int live_in_count = reg_alloc_compute_live_in(&t, live_in);
+    reg_alloc_emit_batch_load(&t, live_in, live_in_count);
 
     const uint8_t *src = arm64_code;
     const uint8_t *end = arm64_code + arm64_size;
@@ -3947,7 +4276,7 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
 
         /* Data Processing - Basic */
         case INSTR_ADD:
-        case INSTR_SUB:         translate_add_sub(&t, op, decoded.instr_type == INSTR_SUB); break;
+        case INSTR_SUB:         translate_add_sub(&t, op, (op >> 29) & 1); break;
         case INSTR_AND:
         case INSTR_ORR:
         case INSTR_EOR:
@@ -4151,13 +4480,33 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
         src += 4;
         t.arm64_cur = src;  /* CRITICAL #5: 更新 ARM 指令指针 */
         
+        /* Emit batch store for live-out registers at block exit */
+        if (is_block_terminator) {
+            uint8_t live_out[32];
+            int live_out_count = reg_alloc_compute_live_out(&t, live_out);
+            reg_alloc_emit_batch_store(&t, live_out, live_out_count);
+        }
+
         /* Stop translation at basic block boundary */
         if (is_block_terminator) {
             break;
         }
     }
 
+    /* Epilogue: Load return value from register home (X0) into RAX and return */
+    /* mov rax, [rbp + ARM_REG_OFFSET(0)] */
+    emit_byte(&t.x86_cur, 0x48);
+    emit_byte(&t.x86_cur, 0x8b);
+    modrm(&t.x86_cur, 2, X86_REG_RAX & 7, 5);
+    emit_imm32(&t.x86_cur, ARM_REG_OFFSET(0));
+
+    /* ret */
+    emit_byte(&t.x86_cur, 0xc3);
+
     *x86_size = t.x86_cur - x86_buffer;
+    
+    /* Apply peephole optimizations */
+    arm2x86_peephole_optimize(x86_buffer, x86_size);
 #ifdef ARM2X86_DEBUG_TRANSLATION
     
     /* 打印前 256 字节翻译后的 x86 代码 */

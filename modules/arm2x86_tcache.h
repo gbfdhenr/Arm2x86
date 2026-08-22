@@ -30,6 +30,8 @@ double arm2x86_tcache_get_miss_rate(arm2x86_translation_cache_t *cache);
 arm2x86_tcache_entry_t *arm2x86_tcache_lookup(arm2x86_translation_cache_t *cache, uintptr_t arm_addr);
 int arm2x86_tcache_insert(arm2x86_translation_cache_t *cache, uintptr_t arm_addr,
                         const uint8_t *x86_code, size_t x86_size);
+int arm2x86_tcache_insert_ex(arm2x86_translation_cache_t *cache, uintptr_t arm_addr,
+                           const uint8_t *x86_code, size_t x86_size, int owned, int mmap);
 
 uint8_t *arm2x86_tcache_get_code(arm2x86_tcache_entry_t *entry);
 size_t arm2x86_tcache_get_size(arm2x86_tcache_entry_t *entry);

@@ -248,7 +248,12 @@ int arm2x86_convert(arm2x86_Context *ctx, const uint8_t *arm64_code,
         return ARM2X86_ERR_CONVERT_FAIL;
     }
 
-    if (mprotect(mem, out_size, PROT_READ | PROT_EXEC) < 0) {
+    /* mprotect requires length to be page-aligned */
+    size_t page_size = sysconf(_SC_PAGESIZE);
+    size_t prot_size = (out_size + page_size - 1) & ~(page_size - 1);
+    if (prot_size > est_size) prot_size = est_size;
+
+    if (mprotect(mem, prot_size, PROT_READ | PROT_EXEC) < 0) {
         set_error(ARM2X86_ERR_CONVERT_FAIL, "mprotect failed: %s", strerror(errno));
         munmap(mem, est_size);
         return ARM2X86_ERR_CONVERT_FAIL;
@@ -421,6 +426,7 @@ void arm2x86_cache_destroy(void)
 #include "modules/arm2x86_tcache.c"
 #include "modules/arm2x86_regs.c"
 #include "modules/arm2x86_emit.c"
+#include "modules/arm2x86_peephole.c"
 #include "modules/arm2x86_decode64.c"
 #include "modules/arm2x86_translate64.c"
 #include "modules/arm2x86_translate32.c"

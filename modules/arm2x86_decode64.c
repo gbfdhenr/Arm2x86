@@ -85,7 +85,7 @@ static int decode_dp_register(uint32_t op, DecodedInstruction *d)
         uint32_t op21 = (op >> 30) & 3;
         uint32_t shift = (op >> 22) & 3;
         if (op21 == 0) d->instr_type = INSTR_ADD;
-        else if (op21 == 1) d->instr_type = INSTR_ADD;
+        else if (op21 == 1) d->instr_type = INSTR_SUB;
         else if (op21 == 2) d->instr_type = INSTR_SUB;
         else d->instr_type = INSTR_SUB;
         d->shift_type = shift;
@@ -213,6 +213,10 @@ static int decode_dp_register(uint32_t op, DecodedInstruction *d)
         d->is_64bit = (op >> 31) & 1;
         d->imm = (op >> 5) & 0xffff;
         d->shift_imm = ((op >> 21) & 3) * 16;
+        /* CRITICAL: Must set register fields for MOV immediate */
+        d->rd = op & 0x1f;
+        d->rn = 0;
+        d->rm = 0;
         d->decoded = 1;
         return ARM2X86_OK;
     }
@@ -311,21 +315,21 @@ int arm2x86_decode(arm2x86_Context *ctx, const uint8_t *arm64_code, DecodedInstr
 #endif
         return ARM2X86_ERR_INVALID_PARAM;
     }
-    
+
     if (!arm64_code) {
 #if ARM2X86_DEBUG_DECODE
         fprintf(stderr, "[ARM2X86] Decode error: NULL instruction pointer\n");
 #endif
         return ARM2X86_ERR_INVALID_PARAM;
     }
-    
+
     if (!decoded) {
 #if ARM2X86_DEBUG_DECODE
         fprintf(stderr, "[ARM2X86] Decode error: NULL decoded output\n");
 #endif
         return ARM2X86_ERR_INVALID_PARAM;
     }
-    
+
     /* Validate instruction alignment (ARM64 requires 4-byte alignment) */
     if (!is_valid_instruction_alignment(arm64_code)) {
 #if ARM2X86_DEBUG_DECODE
@@ -333,7 +337,7 @@ int arm2x86_decode(arm2x86_Context *ctx, const uint8_t *arm64_code, DecodedInstr
 #endif
         return ARM2X86_ERR_INVALID_PARAM;
     }
-    
+
     /* Check if instruction is in valid memory region */
     if (!is_in_executable_region(ctx, arm64_code)) {
 #if ARM2X86_DEBUG_DECODE
@@ -347,7 +351,7 @@ int arm2x86_decode(arm2x86_Context *ctx, const uint8_t *arm64_code, DecodedInstr
     decoded->opcode = read_le32(arm64_code);
 
     uint32_t op = decoded->opcode;
-    
+
     /* Detect all-zero or all-ones patterns (common in padding/uninitialized memory) */
     if (op == 0x00000000 || op == 0xffffffff) {
 #if ARM2X86_DEBUG_DECODE
@@ -468,11 +472,13 @@ int arm2x86_decode(arm2x86_Context *ctx, const uint8_t *arm64_code, DecodedInstr
             return ARM2X86_OK;
         }
         if ((op & 0xffff001f) == 0xd503001f) {
-            uint8_t crm = (op >> 8) & 0xf;
-            if (crm == 0) {
-                decoded->instr_type = INSTR_DATAPROC;
-            } else {
+            uint8_t crm = (op >> 16) & 0xf;   /* CRm = bit 19-16 */
+            uint8_t op2 = (op >> 12) & 0xf;   /* op2 = bit 15-12 */
+            /* HINT instructions: CRm == 0 && op2 <= 4 (NOP, YIELD, WFE, WFI, SEV) */
+            if (crm == 0 && op2 <= 4) {
                 decoded->instr_type = INSTR_HINT;
+            } else {
+                decoded->instr_type = INSTR_DATAPROC;
             }
             decoded->decoded = 1;
             return ARM2X86_OK;

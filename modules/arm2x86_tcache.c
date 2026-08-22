@@ -52,8 +52,10 @@ struct tcache_entry {
     uint16_t hash;
 };
 
-#define TCACHE_FLAG_HOT    0x01
-#define TCACHE_FLAG_LOCKED 0x02
+#define TCACHE_FLAG_HOT      0x01
+#define TCACHE_FLAG_LOCKED   0x02
+#define TCACHE_FLAG_OWNED    0x04  /* Cache owns the memory, free on eviction */
+#define TCACHE_FLAG_MMAP     0x08  /* Memory allocated with mmap, use munmap */
 
 static inline uint16_t tcache_hash_buckets(uint16_t hash, size_t buckets)
 {
@@ -145,6 +147,12 @@ arm2x86_tcache_entry_t *arm2x86_tcache_lookup(arm2x86_translation_cache_t *cache
 int arm2x86_tcache_insert(arm2x86_translation_cache_t *cache, uintptr_t arm_addr,
                         const uint8_t *x86_code, size_t x86_size)
 {
+    return arm2x86_tcache_insert_ex(cache, arm_addr, x86_code, x86_size, 0, 0);
+}
+
+int arm2x86_tcache_insert_ex(arm2x86_translation_cache_t *cache, uintptr_t arm_addr,
+                           const uint8_t *x86_code, size_t x86_size, int owned, int mmap)
+{
     if (!cache || !x86_code) return ARM2X86_ERR_INVALID_PARAM;
 
     pthread_mutex_lock(&cache->lock);
@@ -167,7 +175,13 @@ int arm2x86_tcache_insert(arm2x86_translation_cache_t *cache, uintptr_t arm_addr
 
         cache->used_size -= evict->x86_size;
         cache->entry_count--;
-        free(evict->x86_code);
+        if (evict->flags & TCACHE_FLAG_OWNED) {
+            if (evict->flags & TCACHE_FLAG_MMAP) {
+                munmap(evict->x86_code, evict->x86_size);
+            } else {
+                free(evict->x86_code);
+            }
+        }
         free(evict);
     }
 
@@ -177,32 +191,27 @@ int arm2x86_tcache_insert(arm2x86_translation_cache_t *cache, uintptr_t arm_addr
         return ARM2X86_ERR_MEMORY;
     }
 
-    entry->x86_code = malloc(x86_size);
-    if (!entry->x86_code) {
-        free(entry);
-        pthread_mutex_unlock(&cache->lock);
-        return ARM2X86_ERR_MEMORY;
-    }
-    
-    memcpy(entry->x86_code, x86_code, x86_size);
+    entry->x86_code = (uint8_t *)x86_code;  // Take ownership of pointer
     entry->arm_addr = arm_addr;
     entry->x86_size = x86_size;
     entry->hash = tcache_hash(arm_addr);
     entry->exec_count = 1;
-    
+    if (owned) entry->flags |= TCACHE_FLAG_OWNED;
+    if (mmap) entry->flags |= TCACHE_FLAG_MMAP;
+
     uint16_t bucket_idx = tcache_hash_buckets(entry->hash, buckets);
     entry->next = cache->hash_table[bucket_idx];
     cache->hash_table[bucket_idx] = entry;
-    
+
     entry->lru_prev = NULL;
     entry->lru_next = cache->lru_head;
     if (cache->lru_head) cache->lru_head->lru_prev = entry;
     cache->lru_head = entry;
     if (!cache->lru_tail) cache->lru_tail = entry;
-    
+
     cache->used_size += x86_size;
     cache->entry_count++;
-    
+
     pthread_mutex_unlock(&cache->lock);
     return ARM2X86_OK;
 }
@@ -216,7 +225,13 @@ void arm2x86_tcache_clear(arm2x86_translation_cache_t *cache)
         tcache_entry_t *entry = cache->hash_table[i];
         while (entry) {
             tcache_entry_t *next = entry->next;
-            free(entry->x86_code);
+            if (entry->flags & TCACHE_FLAG_OWNED) {
+                if (entry->flags & TCACHE_FLAG_MMAP) {
+                    munmap(entry->x86_code, entry->x86_size);
+                } else {
+                    free(entry->x86_code);
+                }
+            }
             free(entry);
             entry = next;
         }

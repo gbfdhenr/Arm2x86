@@ -30,41 +30,68 @@ static void (*g_error_callback_global)(arm2x86_error_t, const char *) = NULL;
 #define ARM2X86_VERSION_PATCH 0
 
 // ============================================================
-// Memory Pool for Executable Code
+// Memory Pool for Executable Code - Size-Classed (Tiered) Allocation
 // ============================================================
+
+#define MEMPOOL_NUM_CLASSES 6
+
+static const size_t mempool_class_sizes[MEMPOOL_NUM_CLASSES] = {
+    64,      // Class 0: 64 bytes
+    256,     // Class 1: 256 bytes  
+    1024,    // Class 2: 1 KB
+    4096,    // Class 3: 4 KB
+    16384,   // Class 4: 16 KB
+    65536    // Class 5: 64 KB (default)
+};
+
+/* Get size class index for a given size */
+static inline int mempool_get_class(size_t size) {
+    if (size <= 64) return 0;
+    if (size <= 256) return 1;
+    if (size <= 1024) return 2;
+    if (size <= 4096) return 3;
+    if (size <= 16384) return 4;
+    return 5;
+}
 
 typedef struct arm2x86_mempool_chunk {
     uint8_t *base;           // 内存块基址
     size_t size;             // 总大小
     size_t offset;           // 当前偏移
+    int class_id;            // Size class this chunk belongs to
     struct arm2x86_mempool_chunk *next;
 } arm2x86_mempool_chunk_t;
 
 typedef struct arm2x86_mempool {
-    arm2x86_mempool_chunk_t *chunks;
+    arm2x86_mempool_chunk_t *chunks[MEMPOOL_NUM_CLASSES];  // Per-class chunk lists
     size_t total_size;
     size_t used_size;
-    size_t chunk_size;
+    size_t default_chunk_size;
     size_t max_size;
     int enable_growth;
     pthread_mutex_t lock;
 } arm2x86_mempool_t;
 
 static arm2x86_mempool_chunk_t *arm2x86_mempool_alloc_chunk(size_t size) {
+    int class_id = mempool_get_class(size);
+    size_t actual_size = mempool_class_sizes[class_id];
+    if (size > actual_size) actual_size = ((size + 15) & ~15);
+
     arm2x86_mempool_chunk_t *chunk = malloc(sizeof(arm2x86_mempool_chunk_t));
     if (!chunk) return NULL;
-    
-    uint8_t *mem = mmap(NULL, size,
+
+    uint8_t *mem = mmap(NULL, actual_size,
                        PROT_READ | PROT_WRITE | PROT_EXEC,
                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mem == MAP_FAILED) {
         free(chunk);
         return NULL;
     }
-    
+
     chunk->base = mem;
-    chunk->size = size;
+    chunk->size = actual_size;
     chunk->offset = 0;
+    chunk->class_id = class_id;
     chunk->next = NULL;
     return chunk;
 }
@@ -76,39 +103,43 @@ static void arm2x86_mempool_free_chunk(arm2x86_mempool_chunk_t *chunk) {
     }
 }
 
-static void arm2x86_mempool_init(arm2x86_instance_t *arm2x86, 
+static void arm2x86_mempool_init(arm2x86_instance_t *arm2x86,
                                  const arm2x86_mempool_config_t *config) {
     if (!arm2x86) return;
-    
+
     arm2x86_mempool_t *pool = calloc(1, sizeof(arm2x86_mempool_t));
     if (!pool) return;
-    
-    pool->chunk_size = config && config->chunk_size ? config->chunk_size : 64 * 1024;
+
+    pool->default_chunk_size = config && config->chunk_size ? config->chunk_size : 64 * 1024;
     pool->max_size = config && config->max_size ? config->max_size : 64 * 1024 * 1024;
     pool->enable_growth = config && config->enable_growth ? 1 : 1;
     pthread_mutex_init(&pool->lock, NULL);
-    
-    size_t initial = config && config->initial_size ? config->initial_size : pool->chunk_size;
+
+    size_t initial = config && config->initial_size ? config->initial_size : pool->default_chunk_size;
     if (initial > pool->max_size) initial = pool->max_size;
-    
+
     arm2x86_mempool_chunk_t *chunk = arm2x86_mempool_alloc_chunk(initial);
     if (chunk) {
-        pool->chunks = chunk;
+        int class_id = chunk->class_id;
+        pool->chunks[class_id] = chunk;
         pool->total_size = initial;
     }
-    
+
     arm2x86->mempool = pool;
 }
 
 static void arm2x86_mempool_destroy(arm2x86_instance_t *arm2x86) {
     if (!arm2x86 || !arm2x86->mempool) return;
-    
+
     arm2x86_mempool_t *pool = arm2x86->mempool;
-    arm2x86_mempool_chunk_t *chunk = pool->chunks;
-    while (chunk) {
-        arm2x86_mempool_chunk_t *next = chunk->next;
-        arm2x86_mempool_free_chunk(chunk);
-        chunk = next;
+    for (int c = 0; c < MEMPOOL_NUM_CLASSES; c++) {
+        arm2x86_mempool_chunk_t *chunk = pool->chunks[c];
+        while (chunk) {
+            arm2x86_mempool_chunk_t *next = chunk->next;
+            arm2x86_mempool_free_chunk(chunk);
+            chunk = next;
+        }
+        pool->chunks[c] = NULL;
     }
     pthread_mutex_destroy(&pool->lock);
     free(pool);
@@ -117,14 +148,17 @@ static void arm2x86_mempool_destroy(arm2x86_instance_t *arm2x86) {
 
 static uint8_t *arm2x86_mempool_alloc(arm2x86_instance_t *arm2x86, size_t size) {
     if (!arm2x86 || !arm2x86->mempool) return NULL;
-    
+
     // 对齐到 16 字节
     size = (size + 15) & ~15;
-    
+
     arm2x86_mempool_t *pool = arm2x86->mempool;
     pthread_mutex_lock(&pool->lock);
-    
-    arm2x86_mempool_chunk_t *chunk = pool->chunks;
+
+    int class_id = mempool_get_class(size);
+
+    // First, try to find space in existing chunks of this class
+    arm2x86_mempool_chunk_t *chunk = pool->chunks[class_id];
     while (chunk) {
         if (chunk->offset + size <= chunk->size) {
             uint8_t *ptr = chunk->base + chunk->offset;
@@ -135,30 +169,32 @@ static uint8_t *arm2x86_mempool_alloc(arm2x86_instance_t *arm2x86, size_t size) 
         }
         chunk = chunk->next;
     }
-    
-    // 需要分配新块
-    size_t new_size = pool->chunk_size;
-    if (size > new_size) new_size = ((size + new_size - 1) / new_size) * new_size;
-    
+
+    // Need to allocate new chunk
+    size_t new_size = mempool_class_sizes[class_id];
+    if (size > mempool_class_sizes[class_id]) {
+        new_size = ((size + 15) & ~15);
+    }
+
     if (pool->total_size + new_size > pool->max_size && !pool->enable_growth) {
         pthread_mutex_unlock(&pool->lock);
         return NULL;
     }
-    
+
     arm2x86_mempool_chunk_t *new_chunk = arm2x86_mempool_alloc_chunk(new_size);
     if (!new_chunk) {
         pthread_mutex_unlock(&pool->lock);
         return NULL;
     }
-    
-    new_chunk->next = pool->chunks;
-    pool->chunks = new_chunk;
-    pool->total_size += new_size;
-    
+
+    new_chunk->next = pool->chunks[class_id];
+    pool->chunks[class_id] = new_chunk;
+    pool->total_size += new_chunk->size;
+
     uint8_t *ptr = new_chunk->base;
     new_chunk->offset = size;
     pool->used_size += size;
-    
+
     pthread_mutex_unlock(&pool->lock);
     return ptr;
 }
@@ -201,22 +237,24 @@ arm2x86_error_t arm2x86_mempool_get_stats(arm2x86_instance_t *arm2x86,
     if (!arm2x86 || !arm2x86->mempool) {
         return ARM2X86_ERR_NOT_INITIALIZED;
     }
-    
+
     arm2x86_mempool_t *pool = arm2x86->mempool;
     pthread_mutex_lock(&pool->lock);
-    
+
     if (total_size) *total_size = pool->total_size;
     if (used_size) *used_size = pool->used_size;
     if (free_blocks) {
         int count = 0;
-        arm2x86_mempool_chunk_t *chunk = pool->chunks;
-        while (chunk) {
-            if (chunk->offset < chunk->size) count++;
-            chunk = chunk->next;
+        for (int c = 0; c < MEMPOOL_NUM_CLASSES; c++) {
+            arm2x86_mempool_chunk_t *chunk = pool->chunks[c];
+            while (chunk) {
+                if (chunk->offset < chunk->size) count++;
+                chunk = chunk->next;
+            }
         }
         *free_blocks = count;
     }
-    
+
     pthread_mutex_unlock(&pool->lock);
     return ARM2X86_OK;
 }
@@ -555,7 +593,17 @@ void *arm2x86_translate_easy(arm2x86_instance_t *arm2x86,
         return NULL;
     }
 
-    if (mprotect(x86_code, x86_size, PROT_READ | PROT_EXEC) < 0) {
+    /* mprotect requires page-aligned address and length.
+     * For memory pool allocations, the pointer may not be page-aligned.
+     * Round down address to page boundary, round up size to page boundary. */
+    size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
+    uintptr_t prot_addr = (uintptr_t)x86_code;
+    uintptr_t aligned_addr = prot_addr & ~(page_size - 1);
+    size_t prot_size = x86_size + (prot_addr - aligned_addr);
+    prot_size = (prot_size + page_size - 1) & ~(page_size - 1);
+    if (prot_size > est_size) prot_size = est_size;
+
+    if (mprotect((void *)aligned_addr, prot_size, PROT_READ | PROT_EXEC) < 0) {
         if (!arm2x86->mempool) {
             munmap(x86_code, est_size);
         }
@@ -820,14 +868,12 @@ int arm2x86_translate_batch(arm2x86_instance_t *arm2x86,
 
         // 如果缓存都未命中，执行转译
         if (!x86_code) {
-            uint8_t *x86_code = NULL;
             size_t x86_size = 0;
-            int ret = arm2x86_convert(arm2x86->ctx, block->arm_code, block->code_size, &x86_code, &x86_size);
+            int ret = arm2x86_convert(arm2x86->ctx, block->arm_code, block->code_size, (uint8_t **)&x86_code, &x86_size);
             if (ret != ARM2X86_OK || !x86_code) {
                 block->output = NULL;
                 continue;
             }
-            x86_code = x86_code;
             
             // 存储到哈希表
             uint64_t code_hash = arm2x86_code_hash((const uint8_t *)block->arm_code, block->code_size);
@@ -851,6 +897,172 @@ int arm2x86_translate_batch(arm2x86_instance_t *arm2x86,
     }
 
     return success;
+}
+
+/* ============================================================
+ * Parallel Batch Translation
+ * ============================================================ */
+
+typedef struct {
+    arm2x86_instance_t *arm2x86;
+    arm2x86_code_block_t *blocks;
+    int start_idx;
+    int end_idx;
+    int *success_count;
+} translate_thread_arg_t;
+
+static void *translate_batch_worker(void *arg) {
+    translate_thread_arg_t *targ = (translate_thread_arg_t *)arg;
+    arm2x86_instance_t *arm2x86 = targ->arm2x86;
+    int local_success = 0;
+
+    for (int i = targ->start_idx; i < targ->end_idx; i++) {
+        arm2x86_code_block_t *block = &targ->blocks[i];
+
+        if (!block->arm_code || block->code_size == 0 || !block->output) {
+            block->output = NULL;
+            continue;
+        }
+
+        // 使用地址或代码指针作为缓存键
+        uintptr_t addr = block->address ? block->address : (uintptr_t)block->arm_code;
+
+        // 先查缓存
+        void *x86_code = NULL;
+        int from_hash_dedup = 0;
+        if (arm2x86->cache) {
+            arm2x86_tcache_entry_t *entry = arm2x86_tcache_lookup(arm2x86->cache, addr);
+            if (entry) {
+                x86_code = arm2x86_tcache_get_code(entry);
+            }
+        }
+
+        // 查代码哈希表（去重）
+        if (!x86_code && arm2x86->code_hash_table) {
+            uint64_t code_hash = arm2x86_code_hash((const uint8_t *)block->arm_code, block->code_size);
+            arm2x86_code_hash_entry_t *hash_entry = arm2x86_code_hash_lookup(arm2x86, code_hash);
+            if (hash_entry) {
+                x86_code = hash_entry->x86_code;
+                from_hash_dedup = 1;
+            }
+        }
+
+        // 查持久化缓存
+        if (!x86_code && arm2x86->pcache) {
+            uint8_t *cached_code = NULL;
+            size_t cached_size = 0;
+            int ret = arm2x86_pcache_lookup(arm2x86->pcache, addr,
+                                          (const uint8_t *)block->arm_code, block->code_size,
+                                          &cached_code, &cached_size, 0);
+            if (ret == ARM2X86_PCACHE_OK && cached_code) {
+                uint8_t *exec_code = mmap(NULL, cached_size,
+                                         PROT_READ | PROT_WRITE | PROT_EXEC,
+                                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                if (exec_code != MAP_FAILED) {
+                    memcpy(exec_code, cached_code, cached_size);
+                    free(cached_code);
+                    x86_code = exec_code;
+
+                    if (arm2x86->cache) {
+                        arm2x86_tcache_insert_ex(arm2x86->cache, addr, x86_code, cached_size, 1, 1);
+                    }
+                    uint64_t code_hash = arm2x86_code_hash((const uint8_t *)block->arm_code, block->code_size);
+                    arm2x86_code_hash_insert(arm2x86, code_hash, x86_code, cached_size);
+                }
+                free(cached_code);
+            }
+        }
+
+        // 如果缓存都未命中，执行转译
+        if (!x86_code) {
+            size_t x86_size = 0;
+            int ret = arm2x86_convert(arm2x86->ctx, block->arm_code, block->code_size, (uint8_t **)&x86_code, &x86_size);
+            if (ret != ARM2X86_OK || !x86_code) {
+                block->output = NULL;
+                continue;
+            }
+            x86_code = x86_code;
+
+            // 存储到哈希表
+            uint64_t code_hash = arm2x86_code_hash((const uint8_t *)block->arm_code, block->code_size);
+            arm2x86_code_hash_insert(arm2x86, code_hash, x86_code, x86_size);
+
+            // 存储到缓存
+            if (arm2x86->cache) {
+                arm2x86_tcache_insert_ex(arm2x86->cache, addr, x86_code, x86_size, 1, 1);
+            }
+
+            // 存储到持久化缓存
+            if (arm2x86->pcache) {
+                arm2x86_pcache_store(arm2x86->pcache, addr,
+                                   block->arm_code, block->code_size,
+                                   x86_code, x86_size, 0);
+            }
+        }
+
+        *block->output = x86_code;
+        local_success++;
+    }
+
+    *(targ->success_count) += local_success;
+    return NULL;
+}
+
+/**
+ * 并行批量翻译实现
+ * 使用多线程并行翻译多个代码块
+ */
+int arm2x86_translate_batch_parallel(arm2x86_instance_t *arm2x86,
+                                   arm2x86_code_block_t *blocks,
+                                   int count,
+                                   int num_threads) {
+    if (!arm2x86 || !arm2x86->initialized) {
+        return -ARM2X86_ERR_NOT_INITIALIZED;
+    }
+
+    if (!blocks || count <= 0) {
+        return -ARM2X86_ERR_INVALID_ARGUMENT;
+    }
+
+    if (num_threads <= 1) {
+        return arm2x86_translate_batch(arm2x86, blocks, count);
+    }
+
+    // 限制线程数
+    if (num_threads > count) num_threads = count;
+    if (num_threads > 16) num_threads = 16;
+
+    pthread_t threads[16];
+    translate_thread_arg_t args[16];
+    int success_counts[16] = {0};
+
+    int chunk_size = (count + num_threads - 1) / num_threads;
+
+    for (int t = 0; t < num_threads; t++) {
+        int start = t * chunk_size;
+        int end = (t == num_threads - 1) ? count : start + chunk_size;
+
+        if (start >= end) break;
+
+        translate_thread_arg_t *targ = &args[t];
+        targ->arm2x86 = arm2x86;
+        targ->blocks = blocks;
+        targ->start_idx = start;
+        targ->end_idx = end;
+        targ->success_count = &success_counts[t];
+
+        pthread_create(&threads[t], NULL, translate_batch_worker, targ);
+    }
+
+    int total_success = 0;
+    for (int t = 0; t < num_threads; t++) {
+        if (success_counts[t] >= 0) {
+            pthread_join(threads[t], NULL);
+            total_success += success_counts[t];
+        }
+    }
+
+    return total_success;
 }
 
 const char *arm2x86_version_string(void) {

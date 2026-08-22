@@ -1,7 +1,7 @@
 /*
  * Arm2x86 Test Runner
  * Main entry point for all test suites
- * 
+ *
  * Copyright (c) 2024 Arm2x86 Project
  * Licensed under LGPL-3.0
  */
@@ -14,6 +14,7 @@
 /* Forward declarations for test registration */
 void register_error_tests(arm2x86_test_runner_t *runner);
 void register_cache_tests(arm2x86_test_runner_t *runner);
+void register_comprehensive_tests(arm2x86_test_runner_t *runner);
 
 #define MAX_SUITES 10
 
@@ -29,6 +30,7 @@ int main(int argc, char *argv[])
     /* Register test suites */
     register_error_tests(&runner);
     register_cache_tests(&runner);
+    register_comprehensive_tests(&runner);
     
     printf("\n");
     printf("============================================================\n");
