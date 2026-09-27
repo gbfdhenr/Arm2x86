@@ -198,36 +198,6 @@ arm2x86_destroy(arm2x86);
 5. **Cache**: Store in translation cache with hash key
 6. **Execute**: Jump to cached code or interpret
 
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [README_zh.md](README_zh.md) | Chinese version of this README |
-| [docs/architecture.md](docs/architecture.md) | Detailed architecture and design |
-| [docs/api.md](docs/api.md) | Complete API reference |
-| [docs/building.md](docs/building.md) | Build system and configuration |
-| [docs/translation.md](docs/translation.md) | Translation pipeline and IR |
-| [docs/caching.md](docs/caching.md) | Multi-level caching strategy |
-| [docs/performance.md](docs/performance.md) | Performance tuning guide |
-| [docs/elf_loading.md](docs/elf_loading.md) | ELF loading and Android bridge |
-| [docs/testing.md](docs/testing.md) | Testing framework and adding tests |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | Common issues and solutions |
-
-## Performance
-
-Typical results on Intel i7-12700K / AMD Ryzen 9 7950X:
-
-| Metric | Value |
-|--------|-------|
-| Cold translation (NOP) | ~0.18 μs/op |
-| Cache hit translation | ~0.07 μs/op |
-| Throughput (cached) | 10-15M ops/sec |
-| Memory pool efficiency | ~0.1 μs/translation |
-| Cache deduplication | 100% for identical blocks |
-| Multi-thread scaling | Near-linear to 8 threads |
-
-See [docs/performance.md](docs/performance.md) for detailed benchmarks and tuning.
-
 ## Project Structure
 
 ```

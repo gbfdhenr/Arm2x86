@@ -198,36 +198,6 @@ arm2x86_destroy(arm2x86);
 5. **缓存**：以哈希键存入翻译缓存
 6. **执行**：跳转到缓存代码或解释执行
 
-## 文档
-
-| 文档 | 说明 |
-|------|------|
-| [README.md](README.md) | 英文版 README |
-| [docs/architecture.md](docs/architecture.md) | 详细架构设计文档 |
-| [docs/api.md](docs/api.md) | 完整 API 参考手册 |
-| [docs/building.md](docs/building.md) | 构建系统与配置详解 |
-| [docs/translation.md](docs/translation.md) | 翻译流水线与中间表示 |
-| [docs/caching.md](docs/caching.md) | 多级缓存策略详解 |
-| [docs/performance.md](docs/performance.md) | 性能调优指南 |
-| [docs/elf_loading.md](docs/elf_loading.md) | ELF 加载与 Android Bridge |
-| [docs/testing.md](docs/testing.md) | 测试框架与测试编写 |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | 常见问题与解决方案 |
-
-## 性能表现
-
-典型测试环境：Intel i7-12700K / AMD Ryzen 9 7950X
-
-| 指标 | 数值 |
-|------|------|
-| 冷启动翻译 (NOP) | ~0.18 μs/op |
-| 缓存命中翻译 | ~0.07 μs/op |
-| 吞吐率 (缓存命中) | 10-15M ops/sec |
-| 内存池效率 | ~0.1 μs/翻译 |
-| 缓存去重率 | 100% (相同代码块) |
-| 多线程扩展 | 8 线程近线性扩展 |
-
-详细基准测试和调优见 [docs/performance.md](docs/performance.md)
-
 ## 项目结构
 
 ```
