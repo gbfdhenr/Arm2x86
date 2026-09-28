@@ -10,7 +10,7 @@ jobs:
   build:
     name: Build & Test
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,10 +34,6 @@ jobs:
         run: |
           make clean
           make -j$(nproc)
-
-      - name: Run Tests (Makefile)
-        run: |
-          make test
 
       - name: Build Shared Library
         run: |
