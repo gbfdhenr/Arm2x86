@@ -44,47 +44,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -- -j$(nproc)
 ```
 
-### 运行测试
-
-```bash
-# Makefile
-make test
-LD_LIBRARY_PATH=. ./tests/run_tests
-
-# CMake
-cd build
-LD_LIBRARY_PATH=. ./run_arm2x86_tests
-```
-
-预期输出：
-```
-============================================================
-Arm2x86 DBT Test Suite
-============================================================
-Version: 1.0.0
-
-Running test suite: error_handling
-  test_error_codes_defined                          PASS
-  test_error_messages                               PASS
-  ... (共 10 个测试)
-
-Running test suite: cache
-  ... (共 8 个测试)
-
-Running test suite: comprehensive
-  ... (共 11 个测试)
-
-========================================
-Test Report
-========================================
-Total tests:   29
-Passed:        29
-Failed:        0
-Skipped:       0
-SUCCESS: All tests passed!
-```
-
-## 基础用法
+##基础用法
 
 ### 简化 API (推荐)
 
@@ -220,11 +180,6 @@ Arm2x86/
 │   ├── arm2x86_elf.c            # ELF 加载器
 │   ├── arm2x86_dbt.c            # DBT 运行时
 │   └── ... (更多模块)
-├── tests/                   # 测试套件
-│   ├── run_arm2x86_tests.c  # 测试运行器
-│   ├── test_arm2x86_error.c # 错误处理测试
-│   ├── test_arm2x86_cache.c # 缓存测试
-│   └── test_arm2x86_comprehensive.c # 集成测试
 ├── docs/                    # 文档目录
 ├── CMakeLists.txt           # CMake 构建
 ├── Makefile                 # Make 构建

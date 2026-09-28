@@ -180,11 +180,6 @@ Arm2x86/
 │   ├── arm2x86_elf.c            # ELF loader
 │   ├── arm2x86_dbt.c            # DBT runtime
 │   └── ... (40+ modules)
-├── tests/                   # Test suites
-│   ├── run_arm2x86_tests.c  # Test runner
-│   ├── test_arm2x86_error.c # Error handling tests
-│   ├── test_arm2x86_cache.c # Cache tests
-│   └── test_arm2x86_comprehensive.c # Integration tests
 ├── docs/                    # Documentation
 ├── CMakeLists.txt           # CMake build
 ├── Makefile                 # Make build
