@@ -102,14 +102,6 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/arm2x86.pc
 # 测试
 if(ARM2X86_BUILD_TESTS)
     enable_testing()
-
-    # Build the main test runner with all test sources
-    add_executable(run_arm2x86_tests
-        tests/run_arm2x86_tests.c
-        tests/test_arm2x86_error.c
-        tests/test_arm2x86_cache.c
-        tests/test_arm2x86_comprehensive.c
-    )
     target_link_libraries(run_arm2x86_tests arm2x86)
     add_test(NAME run_arm2x86_tests COMMAND run_arm2x86_tests)
 endif()
