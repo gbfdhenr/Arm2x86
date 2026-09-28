@@ -102,7 +102,7 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/arm2x86.pc
 # 测试
 if(ARM2X86_BUILD_TESTS)
     enable_testing()
-    target_link_libraries(run_arm2x86_tests arm2x86)
+    target_link_libraries(arm2x86)
     add_test(NAME run_arm2x86_tests COMMAND run_arm2x86_tests)
 endif()
 
