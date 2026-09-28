@@ -46,5 +46,4 @@ jobs:
           name: arm2x86-build
           path: |
             libarm2x86.so
-            build/
-          retention-days: 7
+          retention-days: 31
