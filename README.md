@@ -44,46 +44,6 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -- -j$(nproc)
 ```
 
-### Running Tests
-
-```bash
-# Makefile
-make test
-LD_LIBRARY_PATH=. ./tests/run_tests
-
-# CMake
-cd build
-LD_LIBRARY_PATH=. ./run_arm2x86_tests
-```
-
-Expected output:
-```
-============================================================
-Arm2x86 DBT Test Suite
-============================================================
-Version: 1.0.0
-
-Running test suite: error_handling
-  test_error_codes_defined                          PASS
-  test_error_messages                               PASS
-  ... (10 tests total)
-
-Running test suite: cache
-  ... (8 tests total)
-
-Running test suite: comprehensive
-  ... (11 tests total)
-
-========================================
-Test Report
-========================================
-Total tests:   29
-Passed:        29
-Failed:        0
-Skipped:       0
-SUCCESS: All tests passed!
-```
-
 ## Basic Usage
 
 ### Simplified API (Recommended)
