@@ -2,7 +2,6 @@
 
 **A Dynamic Binary Translation Layer for ARM64/ARM32/Thumb → x86_64**
 
-[![Build Status](https://github.com/liangxiangan/Arm2x86/actions/workflows/ci.yml/badge.svg)](https://github.com/liangxiangan/Arm2x86/actions)
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL%203.0-blue.svg)](https://opensource.org/licenses/LGPL-3.0)
 [![C Standard](https://img.shields.io/badge/C-C11-yellow.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 
@@ -253,6 +252,9 @@ This allows:
 - [Intel 64 and IA-32 Architectures Software Developer's Manual](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
 - [QEMU TCG](https://www.qemu.org/docs/master/devel/tcg.html) - Inspiration for DBT design
 - [DynamoRIO](https://dynamorio.org/) - Dynamic instrumentation framework
+
+## Afdian Supporters
+- ...none...
 
 ## Support
 
