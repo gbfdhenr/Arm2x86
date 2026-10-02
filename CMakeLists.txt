@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
-project(Arm2x86 VERSION 1.0.0 LANGUAGES C)
+project(Arm2x86 VERSION 1.0.1 LANGUAGES C)
+
+# Pre-release tag (not part of CMake version format)
+set(ARM2X86_PRE_RELEASE "pre1")
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)

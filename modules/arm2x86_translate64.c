@@ -49,7 +49,9 @@ static inline void emit_load_arm_reg(uint8_t **x86_cur, uint8_t arm_reg, uint8_t
      * We must use mod=2, rm=5 (disp32) to get [RBP + disp32].
      * ModR/M: mod=10(2), reg=x86_reg, rm=5 => 0x80 | (reg&7)<<3 | 5 */
     if (is_64bit) {
-        rex_r(x86_cur, x86_reg, X86_REG_RBP);
+        uint8_t rex = 0x48;  /* REX.W=1 */
+        if (x86_reg >= 8) rex |= 0x04;  /* REX.R=1 for dest reg >= 8 */
+        emit_byte(x86_cur, rex);
     }
     emit_byte(x86_cur, 0x8b);
     modrm(x86_cur, 2, x86_reg & 7, 5);  /* mod=2, rm=5 => [RBP + disp32] */
@@ -63,7 +65,9 @@ static inline void emit_store_arm_reg(uint8_t **x86_cur, uint8_t x86_reg, uint8_
     /* mov [rbp + offset], x86_reg */
     /* CRITICAL: mod=0,rm=5 is RIP-relative; use mod=2,rm=5 for [RBP+disp32] */
     if (is_64bit) {
-        rex_rm(x86_cur, x86_reg >> 3, 0);
+        uint8_t rex = 0x48;  /* REX.W=1 */
+        if (x86_reg >= 8) rex |= 0x01;  /* REX.B=1 for source reg >= 8 */
+        emit_byte(x86_cur, rex);
     }
     emit_byte(x86_cur, 0x89);
     modrm(x86_cur, 2, x86_reg & 7, 5);  /* mod=2, rm=5 => [RBP + disp32] */
@@ -479,8 +483,10 @@ static void reg_alloc_emit_batch_load(TranslateCtx *t, uint8_t *live_regs, int c
 /* Emit batch store of live-out registers at block exit */
 static void reg_alloc_emit_batch_store(TranslateCtx *t, uint8_t *live_regs, int count)
 {
+    fprintf(stderr, "[DEBUG BATCH STORE] count=%d\n", count);
     for (int i = 0; i < count; i++) {
         uint8_t arm_reg = live_regs[i];
+        fprintf(stderr, "[DEBUG BATCH STORE] arm_reg=%d x86_reg=%d dirty=%d\n", arm_reg, t->reg_alloc[arm_reg].x86_reg, t->reg_alloc[arm_reg].dirty);
         if (t->reg_alloc[arm_reg].x86_reg != 0xff && t->reg_alloc[arm_reg].dirty) {
             emit_store_arm_reg(&t->x86_cur, t->reg_alloc[arm_reg].x86_reg, arm_reg, t->reg_alloc[arm_reg].is_64bit);
             t->reg_alloc[arm_reg].dirty = false;
@@ -543,39 +549,12 @@ static int translate_b(TranslateCtx *t, uint32_t op)
 /* Setup calling convention: X0-X7 in RDI,RSI,RDX,RCX,R8,R9, R10,R11 */
 static void reg_alloc_setup_calling_convention(TranslateCtx *t)
 {
-    static const uint8_t arg_regs[8] = {
-        X86_REG_RDI, X86_REG_RSI, X86_REG_RDX, X86_REG_RCX,
-        X86_REG_R8,  X86_REG_R9,  X86_REG_R10, X86_REG_R11
-    };
+    /* Note: We don't pre-assign or pre-load registers here because instructions like MOVZ
+     * write directly to register home after this setup. The register allocator
+     * will allocate registers on demand via reg_alloc_get_reg when needed.
+     * For function calls (BL/BLR), reg_alloc_ensure_fixed will put args in the right registers. */
 
-    for (int i = 0; i < 8; i++) {
-        uint8_t arm_reg = i;  /* X0-X7 */
-        uint8_t x86_reg = arg_regs[i];
-        uint8_t current = t->reg_alloc[arm_reg].x86_reg;
-        if (current != x86_reg) {
-            /* Spill current occupant if any */
-            for (int j = 0; j < 32; j++) {
-                if (t->reg_alloc[j].x86_reg == x86_reg && j != arm_reg) {
-                    if (t->reg_alloc[j].dirty) {
-                        emit_store_arm_reg(&t->x86_cur, x86_reg, j, t->reg_alloc[j].is_64bit);
-                    }
-                    t->reg_alloc[j].x86_reg = 0xff;
-                    reg_alloc_free(t, x86_reg);
-                    break;
-                }
-            }
-            if (t->reg_alloc[arm_reg].x86_reg != 0xff && t->reg_alloc[arm_reg].x86_reg != x86_reg) {
-                if (t->reg_alloc[arm_reg].dirty) {
-                    emit_store_arm_reg(&t->x86_cur, t->reg_alloc[arm_reg].x86_reg, arm_reg, t->reg_alloc[arm_reg].is_64bit);
-                }
-                reg_alloc_free(t, t->reg_alloc[arm_reg].x86_reg);
-            }
-            reg_alloc_assign(t, arm_reg, x86_reg, true);
-            emit_load_arm_reg(&t->x86_cur, arm_reg, x86_reg, true);
-        }
-    }
-
-    /* X29 (FP) -> RBP, X30 (LR) -> special handling */
+    /* X29 (FP) -> RBP */
     reg_alloc_ensure_fixed(t, 29, X86_REG_RBP, true);
 }
 
@@ -936,32 +915,28 @@ static int translate_add_sub(TranslateCtx *t, uint32_t op, int is_sub)
     pc_map_add(t, t->arm64_cur, t->x86_cur);
 
     /* Get registers from allocator */
+    fprintf(stderr, "[DEBUG ADD/SUB] rd=%d rn=%d rm=%d is_sub=%d\n", rd, rn, rm, is_sub);
     uint8_t reg_rn = reg_alloc_get_reg(t, rn, is_64bit, false);
     uint8_t reg_rm = reg_alloc_get_reg(t, rm, is_64bit, false);
     uint8_t reg_rd = reg_alloc_get_reg(t, rd, is_64bit, true);
+    fprintf(stderr, "[DEBUG ADD/SUB] reg_rn=%d reg_rm=%d reg_rd=%d\n", reg_rn, reg_rm, reg_rd);
 
-    /* Perform operation: reg_rd = reg_rn +/- reg_rm */
-    if (is_sub)
-        sub_r64_r64(&t->x86_cur, reg_rd, reg_rm);
-    else
-        add_r64_r64(&t->x86_cur, reg_rd, reg_rm);
-
-    /* If result is in different register than source, move it */
-    if (reg_rd != reg_rn && reg_rd != reg_rm) {
-        /* Result already in reg_rd from allocator, but we need to copy from reg_rn */
+    /* We want: rd = rn + rm (or rn - rm) */
+    if (reg_rd == reg_rn) {
+        /* Destination is same as first source: rd += rm (or rd -= rm) */
+        if (is_sub)
+            sub_r64_r64(&t->x86_cur, reg_rd, reg_rm);
+        else
+            add_r64_r64(&t->x86_cur, reg_rd, reg_rm);
+    } else if (reg_rd == reg_rm) {
+        /* Destination is same as second source: need to copy rn first */
         mov_r64_r64(&t->x86_cur, reg_rd, reg_rn);
         if (is_sub)
             sub_r64_r64(&t->x86_cur, reg_rd, reg_rm);
         else
             add_r64_r64(&t->x86_cur, reg_rd, reg_rm);
-    } else if (reg_rd == reg_rn) {
-        /* Result in same reg as rn, just do the operation */
-        if (is_sub)
-            sub_r64_r64(&t->x86_cur, reg_rd, reg_rm);
-        else
-            add_r64_r64(&t->x86_cur, reg_rd, reg_rm);
-    } else { /* reg_rd == reg_rm */
-        /* Need to copy rn first, then operate */
+    } else {
+        /* Destination is different from both sources: copy rn to rd, then add/sub rm */
         mov_r64_r64(&t->x86_cur, reg_rd, reg_rn);
         if (is_sub)
             sub_r64_r64(&t->x86_cur, reg_rd, reg_rm);
@@ -1210,19 +1185,47 @@ static int translate_mov_imm(TranslateCtx *t, uint32_t op)
     }
 
     /* MOVN/MOVZ: write full value to Rd */
-    rex_rm(&t->x86_cur, 0, 0);
-    emit_byte(&t->x86_cur, 0x48);
-    emit_byte(&t->x86_cur, 0xc7);
-    modrm(&t->x86_cur, 2, 0, 5);  /* mod=2, rm=5 => [RBP + disp32] */
-    emit_imm32(&t->x86_cur, ARM_REG_OFFSET(rd));
-    emit_imm32(&t->x86_cur, (uint32_t)(val & 0xFFFFFFFF));
-    if (val >> 32) {
+    /* Allocate an x86 register for the result */
+    fprintf(stderr, "[DEBUG MOVZ] before: free_reg_count=%d\n", t->free_reg_count);
+    uint8_t x86_reg = reg_alloc_get_free(t);
+    fprintf(stderr, "[DEBUG MOVZ] rd=%d x86_reg=%d free_reg_count=%d\n", rd, x86_reg, t->free_reg_count);
+    if (x86_reg != 0xff) {
+        /* We have a free register - use it */
+        reg_alloc_assign(t, rd, x86_reg, is64);
+        /* Load the value into the register: mov reg, imm64 */
+        /* Need REX.W=1, and REX.B=1 if reg >= 8 */
+        uint8_t rex = 0x48;  /* REX.W=1 */
+        if (x86_reg >= 8) rex |= 0x01;  /* REX.B=1 for reg >= 8 */
+        emit_byte(&t->x86_cur, rex);
+        emit_byte(&t->x86_cur, 0xb8 + (x86_reg & 7));  /* mov reg, imm64 */
+        /* Emit 64-bit immediate as 8 bytes (little endian) */
+        emit_byte(&t->x86_cur, (val >> 0) & 0xff);
+        emit_byte(&t->x86_cur, (val >> 8) & 0xff);
+        emit_byte(&t->x86_cur, (val >> 16) & 0xff);
+        emit_byte(&t->x86_cur, (val >> 24) & 0xff);
+        emit_byte(&t->x86_cur, (val >> 32) & 0xff);
+        emit_byte(&t->x86_cur, (val >> 40) & 0xff);
+        emit_byte(&t->x86_cur, (val >> 48) & 0xff);
+        emit_byte(&t->x86_cur, (val >> 56) & 0xff);
+        /* Also store to register home for the epilogue */
+        emit_store_arm_reg(&t->x86_cur, x86_reg, rd, is64);
+        t->reg_alloc[rd].dirty = true;
+    } else {
+        /* No free register - write to register home only */
         rex_rm(&t->x86_cur, 0, 0);
         emit_byte(&t->x86_cur, 0x48);
         emit_byte(&t->x86_cur, 0xc7);
         modrm(&t->x86_cur, 2, 0, 5);  /* mod=2, rm=5 => [RBP + disp32] */
-        emit_imm32(&t->x86_cur, ARM_REG_OFFSET(rd) + 4);
-        emit_imm32(&t->x86_cur, (uint32_t)(val >> 32));
+        emit_imm32(&t->x86_cur, ARM_REG_OFFSET(rd));
+        emit_imm32(&t->x86_cur, (uint32_t)(val & 0xFFFFFFFF));
+        if (val >> 32) {
+            rex_rm(&t->x86_cur, 0, 0);
+            emit_byte(&t->x86_cur, 0x48);
+            emit_byte(&t->x86_cur, 0xc7);
+            modrm(&t->x86_cur, 2, 0, 5);  /* mod=2, rm=5 => [RBP + disp32] */
+            emit_imm32(&t->x86_cur, ARM_REG_OFFSET(rd) + 4);
+            emit_imm32(&t->x86_cur, (uint32_t)(val >> 32));
+        }
     }
 
     return ARM2X86_OK;
@@ -4213,7 +4216,8 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
                         const uint8_t *arm64_code,
                         size_t arm64_size,
                         uint8_t *x86_buffer,
-                        size_t *x86_size)
+                        size_t *x86_size,
+                        uint8_t *reg_home)
 {
     if (!ctx || !arm64_code || !x86_buffer || !x86_size)
         return ARM2X86_ERR_INVALID_PARAM;
@@ -4225,12 +4229,16 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
     t.x86_base = x86_buffer;
     t.x86_cur = x86_buffer;
 
-    /* 分配寄存器家区域 - 256 字节用于存储 ARM X0-X31 */
-    t.reg_home = malloc(ARM_REG_AREA_SIZE);
-    if (!t.reg_home) {
-        return ARM2X86_ERR_MEMORY;  /* 还没分配，直接返回 */
+    /* 使用提供的寄存器家区域，或自行分配 */
+    if (reg_home) {
+        t.reg_home = reg_home;
+    } else {
+        t.reg_home = malloc(ARM_REG_AREA_SIZE);
+        if (!t.reg_home) {
+            return ARM2X86_ERR_MEMORY;
+        }
+        memset(t.reg_home, 0, ARM_REG_AREA_SIZE);
     }
-    memset(t.reg_home, 0, ARM_REG_AREA_SIZE);
 
     /* 生成 prologue：设置 RBP 指向寄存器家区域 */
     /* 使用 lea rbp, [rip + offset] 加载地址 */
@@ -4307,10 +4315,12 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
     /* Setup calling convention: X0-X7 in RDI,RSI,RDX,RCX,R8,R9,R10,R11 */
     reg_alloc_setup_calling_convention(&t);
 
-    /* Emit batch load for live-in registers at block entry */
+    /* Emit batch load for live-in registers at block entry - DISABLED for debugging */
+    /*
     uint8_t live_in[32];
     int live_in_count = reg_alloc_compute_live_in(&t, live_in);
     reg_alloc_emit_batch_load(&t, live_in, live_in_count);
+    */
 
     const uint8_t *src = arm64_code;
     const uint8_t *end = arm64_code + arm64_size;
@@ -4620,6 +4630,13 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
         }
     }
 
+    /* Final batch store to ensure all dirty registers are written back to register home */
+    {
+        uint8_t live_out[32];
+        int live_out_count = reg_alloc_compute_live_out(&t, live_out);
+        reg_alloc_emit_batch_store(&t, live_out, live_out_count);
+    }
+
     /* Epilogue: Load return value from register home (X0) into RAX and return */
     /* mov rax, [rbp + ARM_REG_OFFSET(0)] */
     emit_byte(&t.x86_cur, 0x48);
@@ -4633,7 +4650,7 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
     *x86_size = t.x86_cur - x86_buffer;
     
     /* Apply peephole optimizations */
-    arm2x86_peephole_optimize(x86_buffer, x86_size);
+    // arm2x86_peephole_optimize(x86_buffer, x86_size);
 #ifdef ARM2X86_DEBUG_TRANSLATION
     
     /* 打印前 256 字节翻译后的 x86 代码 */
@@ -4645,6 +4662,23 @@ int arm2x86_convert_block(arm2x86_Context *ctx,
     fprintf(stderr, "\n");
 #endif
     
-    free(t.reg_home);
+    /* Only free reg_home if we allocated it ourselves */
+    if (!reg_home) {
+        free(t.reg_home);
+    }
     return ARM2X86_OK;
+}
+
+/* Extended version that requires caller to provide reg_home */
+int arm2x86_convert_block_ex(arm2x86_Context *ctx,
+                           const uint8_t *arm64_code,
+                           size_t arm64_size,
+                           uint8_t *x86_buffer,
+                           size_t *x86_size,
+                           uint8_t *reg_home)
+{
+    if (!reg_home) {
+        return ARM2X86_ERR_INVALID_PARAM;
+    }
+    return arm2x86_convert_block(ctx, arm64_code, arm64_size, x86_buffer, x86_size, reg_home);
 }

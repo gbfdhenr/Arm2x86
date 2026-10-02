@@ -88,6 +88,7 @@ typedef struct arm2x86_instance {
     arm2x86_persistent_cache_t *pcache;        // 持久化缓存
     struct arm2x86_code_hash_entry **code_hash_table;  // 代码内容哈希表（去重用）
     struct arm2x86_mempool *mempool;           // 可执行内存池
+    uint8_t *reg_home;                         // 寄存器归宿区域（256字节，用于ARM寄存器存储）
     arm2x86_easy_config_t config;              // 配置信息
     int initialized;                           // 初始化标志
 } arm2x86_instance_t;

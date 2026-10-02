@@ -1,9 +1,9 @@
-# Janus Dynamic Binary Translator - Development Image
-#基于 Ubuntu 22.04，包含完整的构建和测试环境
+# Arm2x86 Dynamic Binary Translator - Development Image
+# 基于 Ubuntu 22.04，包含完整的构建和测试环境
 
 FROM ubuntu:22.04
 
-LABEL maintainer="Janus Project"
+LABEL maintainer="gbfdhenr"
 LABEL description="ARM to x86_64 Dynamic Binary Translation Library"
 LABEL version="1.0.0"
 
@@ -37,13 +37,13 @@ WORKDIR /workspace
 COPY . /workspace/
 
 # 构建项目
-RUN mkdir -p build && cd build && cmake .. -DJANUS_BUILD_TESTS=ON -DJANUS_BUILD_TOOLS=ON && make -j$(nproc)
+RUN mkdir -p build && cd build && cmake .. -DARM2X86_BUILD_TESTS=ON -DARM2X86_BUILD_TOOLS=ON && make -j$(nproc)
 
 # 运行测试
 RUN cd build && ctest --output-on-failure
 
 # 设置环境变量
-ENV JANUS_LIB_PATH=/workspace/build
+ENV ARM2X86_LIB_PATH=/workspace/build
 ENV LD_LIBRARY_PATH=/workspace/build:$LD_LIBRARY_PATH
 
 # 默认命令

@@ -20,12 +20,58 @@
 extern "C" {
 #endif
 
-enum {
+enum arm2x86_error {
     ARM2X86_OK              =  0,
     ARM2X86_ERR_INVALID_PARAM = -4,
     ARM2X86_ERR_CONVERT_FAIL  = -2,
     ARM2X86_ERR_MEMORY        = -3,
     ARM2X86_ERR_LOAD_FAIL     = -1,
+
+    /* Extended error codes (from arm2x86_error.h) */
+    ARM2X86_ERR_INVALID_ARGUMENT = 1001,
+    ARM2X86_ERR_OUT_OF_MEMORY = 1002,
+    ARM2X86_ERR_NOT_INITIALIZED = 1003,
+    ARM2X86_ERR_ALREADY_INITIALIZED = 1004,
+    ARM2X86_ERR_PERMISSION_DENIED = 1005,
+
+    /* Architecture errors */
+    ARM2X86_ERR_UNSUPPORTED_ARCH = 2001,
+    ARM2X86_ERR_ARCH_MISMATCH = 2002,
+
+    /* Decode errors */
+    ARM2X86_ERR_INVALID_ALIGNMENT = 3001,
+    ARM2X86_ERR_INVALID_OPCODE = 3002,
+    ARM2X86_ERR_UNSUPPORTED_INSTRUCTION = 3003,
+    ARM2X86_ERR_DECODE_BUFFER_OVERFLOW = 3004,
+    ARM2X86_ERR_INVALID_REGISTER = 3005,
+
+    /* Translation errors */
+    ARM2X86_ERR_TRANSLATION_FAILED = 4001,
+    ARM2X86_ERR_CODE_GENERATION_FAILED = 4002,
+    ARM2X86_ERR_REGISTER_ALLOC_FAILED = 4003,
+    ARM2X86_ERR_BRANCH_TARGET_INVALID = 4004,
+
+    /* Cache errors */
+    ARM2X86_ERR_CACHE_FULL = 5001,
+    ARM2X86_ERR_CACHE_MISS = 5002,
+    ARM2X86_ERR_CACHE_CORRUPTED = 5003,
+    ARM2X86_ERR_CACHE_CONFIG_INVALID = 5004,
+
+    /* Memory errors */
+    ARM2X86_ERR_MEMORY_MAP_FAILED = 6001,
+    ARM2X86_ERR_MEMORY_PROTECT_FAILED = 6002,
+    ARM2X86_ERR_MEMORY_NOT_REGISTERED = 6003,
+    ARM2X86_ERR_MEMORY_BOUNDARY_EXCEEDED = 6004,
+
+    /* Execution errors */
+    ARM2X86_ERR_EXECUTION_FAILED = 7001,
+    ARM2X86_ERR_INVALID_CODE_ADDRESS = 7002,
+    ARM2X86_ERR_SIGNAL_HANDLING_FAILED = 7003,
+
+    /* Internal errors */
+    ARM2X86_ERR_INTERNAL = 9001,
+    ARM2X86_ERR_NOT_IMPLEMENTED = 9002,
+    ARM2X86_ERR_UNKNOWN = 9999,
 };
 
 #define ARM64_NOP         0xd503201f
@@ -739,7 +785,8 @@ int   arm2x86_decode_arm32(arm2x86_Context *ctx, const uint8_t *code, DecodedIns
 int   arm2x86_decode_thumb(arm2x86_Context *ctx, const uint8_t *code, DecodedInstruction *decoded);
 /* WARNING: x86_out is allocated, caller must free */
 int   arm2x86_convert(arm2x86_Context *ctx, const uint8_t *code, size_t code_size, uint8_t **x86_out, size_t *x86_out_size);
-int   arm2x86_convert_block(arm2x86_Context *ctx, const uint8_t *code, size_t code_size, uint8_t *x86_buffer, size_t *x86_size);
+int   arm2x86_convert_block(arm2x86_Context *ctx, const uint8_t *code, size_t code_size, uint8_t *x86_buffer, size_t *x86_size, uint8_t *reg_home);
+int   arm2x86_convert_block_ex(arm2x86_Context *ctx, const uint8_t *arm64_code, size_t arm64_size, uint8_t *x86_buffer, size_t *x86_size, uint8_t *reg_home);
 int   arm2x86_convert_block_arm32(arm2x86_Context *ctx, const uint8_t *arm_code, size_t arm_size, uint8_t *x86_buffer, size_t *x86_size);
 int   arm2x86_convert_block_thumb(arm2x86_Context *ctx, const uint8_t *thumb_code, size_t thumb_size, uint8_t *x86_buffer, size_t *x86_size);
 uint8_t arm2x86_map_register(uint8_t arm_reg);

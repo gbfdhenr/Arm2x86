@@ -246,7 +246,7 @@ int arm2x86_convert(arm2x86_Context *ctx, const uint8_t *arm64_code,
     memset(mem, 0, est_size);
 
     size_t out_size = est_size;
-    int rc = arm2x86_convert_block(ctx, arm64_code, arm64_size, mem, &out_size);
+    int rc = arm2x86_convert_block(ctx, arm64_code, arm64_size, mem, &out_size, NULL);
     if (rc != ARM2X86_OK) {
         munmap(mem, est_size);
         return rc;

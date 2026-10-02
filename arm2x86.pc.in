@@ -3,8 +3,8 @@ exec_prefix=${prefix}
 libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
 includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
 
-Name: Janus
+Name: Arm2x86
 Description: ARM to x86_64 Dynamic Binary Translation Library
 Version: @PROJECT_VERSION@
-Libs: -L${libdir} -ljanus
+Libs: -L${libdir} -larm2x86
 Cflags: -I${includedir}

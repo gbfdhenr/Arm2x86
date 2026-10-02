@@ -34,7 +34,7 @@ Arm2x86 is a high-performance **Dynamic Binary Translation (DBT)** system that t
 
 ```bash
 # Using Makefile (simpler)
-git clone https://github.com/liangxiangan/Arm2x86.git
+git clone https://github.com/gbfdhenr/Arm2x86.git
 cd Arm2x86
 make -j$(nproc)
 
@@ -64,7 +64,7 @@ int main() {
 
     // 3. ARM64 machine code: MOV X0, #42; RET
     uint8_t arm64_code[] = {
-        0x2a, 0x00, 0x00, 0xd2,  // MOV X0, #42
+        0x40, 0x05, 0x80, 0xd2,  // MOV X0, #42
         0xc0, 0x03, 0x5f, 0xd6   // RET
     };
 

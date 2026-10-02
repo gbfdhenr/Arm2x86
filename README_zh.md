@@ -34,7 +34,7 @@ Arm2x86 是一个高性能的**动态二进制翻译 (DBT)** 系统，可在运�
 
 ```bash
 # 使用 Makefile (更简单)
-git clone https://github.com/liangxiangan/Arm2x86.git
+git clone https://github.com/gbfdhenr/Arm2x86.git
 cd Arm2x86
 make -j$(nproc)
 
@@ -64,10 +64,9 @@ int main() {
 
     // 3. ARM64 机器码: MOV X0, #42; RET
     uint8_t arm64_code[] = {
-        0x2a, 0x00, 0x00, 0xd2,  // MOV X0, #42
-        0xc0, 0x03, 0x5f, 0xd6   // RET
+	0x40, 0x05, 0x80, 0xd2,  // MOV X0, #42
+	0xc0, 0x03, 0x5f, 0xd6   // RET
     };
-
     // 4. 翻译为 x86_64
     void *x86_code = arm2x86_translate_easy(arm2x86, arm64_code, sizeof(arm64_code));
     if (!x86_code) {

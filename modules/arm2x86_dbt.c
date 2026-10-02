@@ -211,7 +211,7 @@ uint8_t *dbt_translate_block(arm2x86_Context *ctx, uint64_t arm_pc, uint8_t *x86
     } else if (mode == ARM2X86_MODE_THUMB) {
         rc = arm2x86_convert_block_thumb(ctx, arm_code, arm_size * 2, block_mem, x86_size);
     } else {
-        rc = arm2x86_convert_block(ctx, arm_code, arm_size, block_mem, x86_size);
+        rc = arm2x86_convert_block(ctx, arm_code, arm_size, block_mem, x86_size, NULL);
     }
 
     if (rc != ARM2X86_OK) {

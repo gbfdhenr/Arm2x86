@@ -15,6 +15,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <unistd.h>
 
 // 内部日志缓冲
 #define LOG_BUFFER_SIZE 1024
@@ -23,6 +24,11 @@ static __thread char g_log_buffer[LOG_BUFFER_SIZE];
 // 全局日志/错误回调
 static void (*g_log_callback_global)(const char *msg) = NULL;
 static void (*g_error_callback_global)(arm2x86_error_t, const char *) = NULL;
+
+// External assembly function to call translated code with register home (6 args: reg_home, func, a0, a1, a2, a3)
+extern uint64_t arm2x86_call_with_reg_home(uint64_t reg_home, void *func,
+                                           uint64_t a0, uint64_t a1, uint64_t a2,
+                                           uint64_t a3);
 
 // 版本信息
 #define ARM2X86_VERSION_MAJOR 1
@@ -448,6 +454,19 @@ arm2x86_instance_t *arm2x86_create_easy(const arm2x86_easy_config_t *config) {
     g_log_callback_global = cfg.log_callback;
     g_error_callback_global = cfg.error_callback;
 
+    // 分配寄存器归宿区域 (256 字节，16 字节对齐)
+    arm2x86->reg_home = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arm2x86->reg_home == MAP_FAILED) {
+        arm2x86->reg_home = NULL;
+        // Non-fatal, translation will fall back to malloc
+    } else {
+        memset(arm2x86->reg_home, 0, 256);
+    }
+
+    // Disable peephole optimizer for debugging
+    // cfg.enable_peephole = 0;
+
     arm2x86->initialized = 1;
 
     if (g_log_callback_global) {
@@ -461,6 +480,11 @@ arm2x86_instance_t *arm2x86_create_easy(const arm2x86_easy_config_t *config) {
 void arm2x86_destroy_easy(arm2x86_instance_t *arm2x86) {
     if (!arm2x86) return;
 
+    write(STDERR_FILENO, "DEBUG destroy_easy: start\n", 24);
+    write(STDERR_FILENO, "DEBUG destroy_easy: arm2x86=", 25);
+    char ptr_buf[32];
+    int n = snprintf(ptr_buf, sizeof(ptr_buf), "%p\n", (void*)arm2x86);
+    write(STDERR_FILENO, ptr_buf, n);
     if (arm2x86->pcache) {
         arm2x86_pcache_destroy(arm2x86->pcache);
     }
@@ -481,13 +505,20 @@ void arm2x86_destroy_easy(arm2x86_instance_t *arm2x86) {
         free(arm2x86->ctx);
     }
 
+    // 释放寄存器归宿区域
+    if (arm2x86->reg_home) {
+        fprintf(stderr, "DEBUG destroy_easy: munmap reg_home=%p\n", arm2x86->reg_home);
+        munmap(arm2x86->reg_home, 4096);
+        arm2x86->reg_home = NULL;
+        }
+
     if (g_log_callback_global) {
         snprintf(g_log_buffer, LOG_BUFFER_SIZE, "Arm2x86 instance destroyed");
         g_log_callback_global(g_log_buffer);
     }
 
     free(arm2x86);
-}
+    }
 
 void *arm2x86_translate_easy(arm2x86_instance_t *arm2x86,
                            const void *arm_code,
@@ -504,7 +535,7 @@ void *arm2x86_translate_easy(arm2x86_instance_t *arm2x86,
         return NULL;
     }
 
-    uintptr_t addr = (uintptr_t)arm_code;
+        uintptr_t addr = (uintptr_t)arm_code;
 
     // 1. 先查转译缓存
     if (arm2x86->cache) {
@@ -530,7 +561,7 @@ void *arm2x86_translate_easy(arm2x86_instance_t *arm2x86,
                 memcpy(exec_code, x86_code, x86_size);
                 free(x86_code);  // 释放 pcache 返回的临时内存
                 x86_code = exec_code;
-                
+
                 // 回填到转译缓存
                 if (arm2x86->cache) {
                     arm2x86_tcache_insert(arm2x86->cache, addr, x86_code, x86_size);
@@ -579,7 +610,9 @@ void *arm2x86_translate_easy(arm2x86_instance_t *arm2x86,
 
     memset(x86_code, 0, est_size);
 
-    int ret = arm2x86_convert_block(arm2x86->ctx, arm_code, code_size, x86_code, &x86_size);
+    fprintf(stderr, "DEBUG: calling arm2x86_convert_block_ex, reg_home=%p\n", arm2x86->reg_home);
+    int ret = arm2x86_convert_block_ex(arm2x86->ctx, arm_code, code_size, x86_code, &x86_size, arm2x86->reg_home);
+    fprintf(stderr, "DEBUG: arm2x86_convert_block_ex returned %d\n", ret);
     if (ret != ARM2X86_OK || !x86_code) {
         if (arm2x86->mempool) {
             // 内存池分配的内存不需要单独 munmap，由内存池统一管理
@@ -645,7 +678,7 @@ void *arm2x86_translate_addr(arm2x86_instance_t *arm2x86, uintptr_t address) {
         return NULL;
     }
 
-    // 查找缓存
+    // 1. 查找翻译缓存 (L1)
     if (arm2x86->cache) {
         arm2x86_tcache_entry_t *entry = arm2x86_tcache_lookup(arm2x86->cache, address);
         if (entry) {
@@ -653,9 +686,118 @@ void *arm2x86_translate_addr(arm2x86_instance_t *arm2x86, uintptr_t address) {
         }
     }
 
-    // 执行转译
-    // 需要读取 ARM 代码 - 这里简化处理
-    return NULL;
+    // 2. 查找持久化缓存 (L2)
+    if (arm2x86->pcache) {
+        // 需要先读取 ARM 代码来计算哈希
+        // 这里假设 address 指向可读的 ARM 代码
+        const uint8_t *arm_code = (const uint8_t *)address;
+        uint8_t *x86_code = NULL;
+        size_t x86_size = 0;
+        int ret = arm2x86_pcache_lookup(arm2x86->pcache, address,
+                                      arm_code, 64,  // 默认读取 64 字节用于哈希
+                                      &x86_code, &x86_size, 0);
+        if (ret == ARM2X86_PCACHE_OK && x86_code) {
+            // 分配可执行内存并复制
+            uint8_t *exec_code = mmap(NULL, x86_size,
+                                     PROT_READ | PROT_WRITE | PROT_EXEC,
+                                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (exec_code != MAP_FAILED) {
+                memcpy(exec_code, x86_code, x86_size);
+                free(x86_code);
+                x86_code = exec_code;
+
+                // 回填到翻译缓存
+                if (arm2x86->cache) {
+                    arm2x86_tcache_insert(arm2x86->cache, address, x86_code, x86_size);
+                }
+                return x86_code;
+            }
+            free(x86_code);
+        }
+    }
+
+    // 3. 尝试直接翻译该地址处的代码
+    // 读取一段合理的代码块进行翻译
+    const uint8_t *arm_code = (const uint8_t *)address;
+    size_t code_size = 256;  // 默认翻译 256 字节
+
+    // 检查内存可读性 (简化检查)
+    // 实际应该用 mincore 或尝试读取
+    uint8_t test_byte;
+    if (arm_code == NULL) {
+        arm2x86_set_error(ARM2X86_ERR_INVALID_ARGUMENT, "Invalid address",
+                       __FILE__, __LINE__, __func__);
+        return NULL;
+    }
+    test_byte = arm_code[0];  // 触发可能的 SIGSEGV
+
+    uint8_t *x86_code = NULL;
+    size_t x86_size = 0;
+    size_t est_size = (code_size / 4) * 16 + 4096;
+
+    if (arm2x86->mempool) {
+        x86_code = arm2x86_mempool_alloc(arm2x86, est_size);
+        if (!x86_code) {
+            x86_code = mmap(NULL, est_size,
+                           PROT_READ | PROT_WRITE | PROT_EXEC,
+                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        }
+    } else {
+        x86_code = mmap(NULL, est_size,
+                       PROT_READ | PROT_WRITE | PROT_EXEC,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    }
+
+    if (!x86_code || x86_code == MAP_FAILED) {
+        arm2x86_set_error(ARM2X86_ERR_MEMORY, "Failed to allocate executable memory",
+                       __FILE__, __LINE__, __func__);
+        return NULL;
+    }
+
+    memset(x86_code, 0, est_size);
+
+    int ret = arm2x86_convert_block_ex(arm2x86->ctx, arm_code, code_size, x86_code, &x86_size, arm2x86->reg_home);
+    if (ret != ARM2X86_OK || x86_size == 0) {
+        if (arm2x86->mempool) {
+            // 内存池内存由池管理
+        } else {
+            munmap(x86_code, est_size);
+        }
+        arm2x86_set_error(ARM2X86_ERR_CONVERT_FAIL, "Translation failed",
+                       __FILE__, __LINE__, __func__);
+        return NULL;
+    }
+
+    // mprotect
+    size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
+    uintptr_t prot_addr = (uintptr_t)x86_code;
+    uintptr_t aligned_addr = prot_addr & ~(page_size - 1);
+    size_t prot_size = x86_size + (prot_addr - aligned_addr);
+    prot_size = (prot_size + page_size - 1) & ~(page_size - 1);
+    if (prot_size > est_size) prot_size = est_size;
+
+    if (mprotect((void *)aligned_addr, prot_size, PROT_READ | PROT_EXEC) < 0) {
+        if (!arm2x86->mempool) {
+            munmap(x86_code, est_size);
+        }
+        arm2x86_set_error(ARM2X86_ERR_CONVERT_FAIL, "mprotect failed",
+                       __FILE__, __LINE__, __func__);
+        return NULL;
+    }
+
+    // 存储到缓存
+    if (arm2x86->cache) {
+        arm2x86_tcache_insert(arm2x86->cache, address, x86_code, x86_size);
+    }
+
+    // 存储到持久化缓存
+    if (arm2x86->pcache) {
+        arm2x86_pcache_store(arm2x86->pcache, address,
+                           arm_code, code_size,
+                           x86_code, x86_size, 0);
+    }
+
+    return x86_code;
 }
 
 uint64_t arm2x86_execute_easy(arm2x86_instance_t *arm2x86,
@@ -674,39 +816,30 @@ uint64_t arm2x86_execute_easy(arm2x86_instance_t *arm2x86,
         return 0;
     }
 
-    // 执行转译后的代码
-    // 这里需要根据调用约定设置参数并调用
-    // 简化实现：假设函数签名为 uint64_t func(uint64_t, uint64_t, ...)
-    typedef uint64_t (*func_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-    func_t func = (func_t)translated_code;
-    
+    /* 
+     * The translated code uses the register-home model:
+     * - It expects RBP to point to a 256-byte register home area (32 ARM registers × 8 bytes)
+     * - Arguments are passed in System V AMD64 ABI registers: RDI, RSI, RDX, RCX, R8, R9
+     * - The prologue stores these to the register home (X0-X7 at offsets 0, 8, 16, 24, 32, 40, 48, 56)
+     * - The epilogue loads X0 from register home (offset 0) into RAX and returns
+     * 
+     * We use the instance's register home area (arm2x86->reg_home).
+     */
+
+    /* Prepare arguments in System V AMD64 ABI registers */
     uint64_t a0 = num_args > 0 ? args[0] : 0;
     uint64_t a1 = num_args > 1 ? args[1] : 0;
     uint64_t a2 = num_args > 2 ? args[2] : 0;
     uint64_t a3 = num_args > 3 ? args[3] : 0;
-    uint64_t a4 = num_args > 4 ? args[4] : 0;
-    uint64_t a5 = num_args > 5 ? args[5] : 0;
-    
-    return func(a0, a1, a2, a3, a4, a5);
-}
 
-arm2x86_error_t arm2x86_get_stats_easy(arm2x86_instance_t *arm2x86,
-                                   struct arm2x86_perf_stats *stats) {
-    if (!arm2x86 || !arm2x86->initialized) {
-        return ARM2X86_ERR_NOT_INITIALIZED;
-    }
-    
-    if (!stats) {
-        return ARM2X86_ERR_INVALID_ARGUMENT;
-    }
+    uint64_t result = 0;
 
-    if (arm2x86->perf) {
-        const struct arm2x86_perf_stats *perf_stats = arm2x86_perf_get_stats();
-        if (perf_stats) {
-            *stats = *perf_stats;
-        }
-    }
-    return ARM2X86_OK;
+    fprintf(stderr, "DEBUG execute_easy: before call, reg_home=%p, func=%p\n", arm2x86->reg_home, translated_code);
+    /* Use external assembly function to call translated code with register home */
+    result = arm2x86_call_with_reg_home((uint64_t)arm2x86->reg_home, translated_code,
+                                        a0, a1, a2, a3);
+    fprintf(stderr, "DEBUG execute_easy: after arm2x86_call_with_reg_home, result=%lu\n", result);
+    return result;
 }
 
 arm2x86_error_t arm2x86_export_perf_json(arm2x86_instance_t *arm2x86,

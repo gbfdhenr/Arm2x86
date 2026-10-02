@@ -1,7 +1,7 @@
 /*
  * Arm2x86 Test Framework
  * Automated testing for Arm2x86 DBT library
- * 
+ *
  * Copyright (c) 2024 Arm2x86 Project
  * Licensed under LGPL-3.0
  */

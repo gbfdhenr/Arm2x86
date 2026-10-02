@@ -417,20 +417,74 @@ static const SyscallMap syscall_table[] = {
     { 0,   0,   NULL }
 };
 
+/* ============================================================
+ * Optimized syscall number translation: O(1) direct array lookup
+ * ARM64 syscall numbers go up to ~400+ on modern kernels, so 1024 is safe.
+ * ============================================================ */
+#define SYSCALL_TABLE_MAX_NR 1024
+static int g_syscall_lookup[SYSCALL_TABLE_MAX_NR];
+static bool g_syscall_lookup_initialized = false;
+
+static void init_syscall_lookup(void)
+{
+    if (g_syscall_lookup_initialized) return;
+
+    /* Initialize all entries to -1 (unknown syscall) */
+    for (int i = 0; i < SYSCALL_TABLE_MAX_NR; i++) {
+        g_syscall_lookup[i] = -1;
+    }
+
+    /* Populate from syscall_table */
+    for (int i = 0; syscall_table[i].name != NULL; i++) {
+        int arm_nr = syscall_table[i].arm64_nr;
+        if (arm_nr >= 0 && arm_nr < SYSCALL_TABLE_MAX_NR) {
+            g_syscall_lookup[arm_nr] = syscall_table[i].x86_64_nr;
+        }
+    }
+    g_syscall_lookup_initialized = true;
+}
+
 int translate_syscall_number(int arm64_nr)
 {
-    for (int i = 0; syscall_table[i].name != NULL; i++) {
-        if (syscall_table[i].arm64_nr == arm64_nr)
-            return syscall_table[i].x86_64_nr;
+    if (!g_syscall_lookup_initialized) {
+        init_syscall_lookup();
+    }
+    if (arm64_nr >= 0 && arm64_nr < SYSCALL_TABLE_MAX_NR) {
+        return g_syscall_lookup[arm64_nr];
     }
     return -1;
 }
 
+/* ============================================================
+ * Optimized syscall name lookup: O(1) direct array lookup
+ * ============================================================ */
+static const char *g_syscall_name_lookup[SYSCALL_TABLE_MAX_NR];
+static bool g_syscall_name_initialized = false;
+
+static void init_syscall_name_lookup(void)
+{
+    if (g_syscall_name_initialized) return;
+
+    for (int i = 0; i < SYSCALL_TABLE_MAX_NR; i++) {
+        g_syscall_name_lookup[i] = "unknown";
+    }
+
+    for (int i = 0; syscall_table[i].name != NULL; i++) {
+        int arm_nr = syscall_table[i].arm64_nr;
+        if (arm_nr >= 0 && arm_nr < SYSCALL_TABLE_MAX_NR) {
+            g_syscall_name_lookup[arm_nr] = syscall_table[i].name;
+        }
+    }
+    g_syscall_name_initialized = true;
+}
+
 const char *get_syscall_name(int arm64_nr)
 {
-    for (int i = 0; syscall_table[i].name != NULL; i++) {
-        if (syscall_table[i].arm64_nr == arm64_nr)
-            return syscall_table[i].name;
+    if (!g_syscall_name_initialized) {
+        init_syscall_name_lookup();
+    }
+    if (arm64_nr >= 0 && arm64_nr < SYSCALL_TABLE_MAX_NR) {
+        return g_syscall_name_lookup[arm64_nr];
     }
     return "unknown";
 }
@@ -879,7 +933,7 @@ static void sigsegv_handler(int sig, siginfo_t *info, void *ucontext)
             memset(&ctx, 0, sizeof(ctx));
             ctx.mode = ARM2X86_MODE_ARM64;
 
-            int rc = arm2x86_convert_block(&ctx, fault_addr, 64, x86_buffer, &x86_size);
+            int rc = arm2x86_convert_block(&ctx, fault_addr, 64, x86_buffer, &x86_size, NULL);
             if (rc == ARM2X86_OK && x86_size > 0) {
                 /* Copy translated code to executable memory */
                 uint8_t *exec_mem = mmap(NULL, x86_size,

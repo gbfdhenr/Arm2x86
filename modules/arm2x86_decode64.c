@@ -199,8 +199,13 @@ static int decode_dp_register(uint32_t op, DecodedInstruction *d)
         return ARM2X86_OK;
     }
 
-    /* Move wide (immediate) - MOVZ/MOVN/MOVK */
-    if ((op & 0x1f800000) == 0x12800000 || (op & 0x7f800000) == 0x32800000) {
+    /* Move wide (immediate) - MOVZ/MOVN/MOVK (ARMv8-A) */
+    /* 64-bit: sf=1, opc=00/10/11, bits 28-23=00101, hw=bits 22-21 */
+    /* 32-bit: sf=0, opc=00/10/11, bits 28-23=00101, hw=bits 22-21 */
+    /* Mask for bits 31-21: sf(1) + opc(2) + fixed(6) + hw(2) = 11 bits = 0xFFE00000 */
+    uint32_t mov_mask = (op & 0xFFE00000);
+    if (mov_mask == 0xD2800000 || mov_mask == 0x92800000 || mov_mask == 0xF2800000 ||  /* 64-bit */
+        mov_mask == 0x52800000 || mov_mask == 0x12800000 || mov_mask == 0x72800000) {     /* 32-bit */
         uint32_t opc = (op >> 29) & 3;
         if (opc == 0) d->instr_type = INSTR_MOVN;
         else if (opc == 2) d->instr_type = INSTR_MOVZ;
