@@ -22,20 +22,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake git
 
-      - name: Configure (CMake)
+      - name: Configure
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release .
+          cmake -DCMAKE_BUILD_TYPE=Release .
 
       - name: Build
         run: |
-          cmake --build build -- -j$(nproc)
+          make
 
-      - name: Build (Makefile)
-        run: |
-          make clean
-          make -j$(nproc)
-
-      - name: Build Shared Library
+      - name: Checkout Shared Library
         run: |
           ls -la libarm2x86.so
 
@@ -45,5 +40,5 @@ jobs:
         with:
           name: arm2x86-build
           path: |
-            libarm2x86.so
+            libarm2x86.so.1
           retention-days: 31
